@@ -18,13 +18,17 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#ifndef __LOGGER_CONFIGURATION_H__
-#define __LOGGER_CONFIGURATION_H__
+#ifndef LIBMINIFI_INCLUDE_CORE_LOGGING_LOGGERCONFIGURATION_H_
+#define LIBMINIFI_INCLUDE_CORE_LOGGING_LOGGERCONFIGURATION_H_
 
+#include <memory>
+#include <vector>
 #include <map>
 #include <mutex>
 #include <string>
-#include "spdlog/spdlog.h"
+#include "spdlog/common.h"
+#include "spdlog/sinks/sink.h"
+#include "spdlog/logger.h"
 #include "spdlog/formatter.h"
 
 #include "core/Core.h"
@@ -52,11 +56,13 @@ struct LoggerNamespace {
         children(std::map<std::string, std::shared_ptr<LoggerNamespace>>()) {
   }
 };
-}
-;
+}  // namespace internal
 
 class LoggerProperties : public Properties {
  public:
+  LoggerProperties()
+      : Properties("Logger properties") {
+  }
   /**
    * Gets all keys that start with the given prefix and do not have a "." after the prefix and "." separator.
    *
@@ -77,6 +83,7 @@ class LoggerProperties : public Properties {
 
   static const char* appender_prefix;
   static const char* logger_prefix;
+
  private:
   std::map<std::string, std::shared_ptr<spdlog::sinks::sink>> sinks_;
 };
@@ -91,13 +98,21 @@ class LoggerConfiguration {
     return logger_configuration;
   }
 
-  void disableLogging(){
+  static std::unique_ptr<LoggerConfiguration> newInstance() {
+    return std::unique_ptr<LoggerConfiguration>(new LoggerConfiguration());
+  }
+
+  void disableLogging() {
     controller_->setEnabled(false);
   }
 
-  void enableLogging(){
-      controller_->setEnabled(true);
-    }
+  void enableLogging() {
+    controller_->setEnabled(true);
+  }
+
+  bool shortenClassNames() const {
+    return shorten_names_;
+  }
   /**
    * (Re)initializes the logging configuation with the given logger properties.
    */
@@ -107,26 +122,32 @@ class LoggerConfiguration {
    * Can be used to get arbitrarily named Logger, LoggerFactory should be preferred within a class.
    */
   std::shared_ptr<Logger> getLogger(const std::string &name);
+
   static const char *spdlog_default_pattern;
+
  protected:
   static std::shared_ptr<internal::LoggerNamespace> initialize_namespaces(const std::shared_ptr<LoggerProperties> &logger_properties);
   static std::shared_ptr<spdlog::logger> get_logger(std::shared_ptr<Logger> logger, const std::shared_ptr<internal::LoggerNamespace> &root_namespace, const std::string &name,
                                                     std::shared_ptr<spdlog::formatter> formatter, bool remove_if_present = false);
+
  private:
+  static std::shared_ptr<spdlog::sinks::sink> create_syslog_sink();
+  static std::shared_ptr<spdlog::sinks::sink> create_fallback_sink();
+
   static std::shared_ptr<internal::LoggerNamespace> create_default_root();
 
   class LoggerImpl : public Logger {
    public:
-    LoggerImpl(std::string name, std::shared_ptr<LoggerControl> controller, std::shared_ptr<spdlog::logger> delegate)
-        : Logger(delegate,controller),
+    explicit LoggerImpl(const std::string &name, const std::shared_ptr<LoggerControl> &controller, const std::shared_ptr<spdlog::logger> &delegate)
+        : Logger(delegate, controller),
           name(name) {
     }
+
     void set_delegate(std::shared_ptr<spdlog::logger> delegate) {
       std::lock_guard<std::mutex> lock(mutex_);
       delegate_ = delegate;
     }
     const std::string name;
-
   };
 
   LoggerConfiguration();
@@ -136,6 +157,7 @@ class LoggerConfiguration {
   std::mutex mutex;
   std::shared_ptr<LoggerImpl> logger_ = nullptr;
   std::shared_ptr<LoggerControl> controller_;
+  bool shorten_names_;
 };
 
 template<typename T>
@@ -150,16 +172,16 @@ class LoggerFactory {
   }
 
   static std::shared_ptr<Logger> getAliasedLogger(const std::string &alias) {
-      std::shared_ptr<Logger> logger = LoggerConfiguration::getConfiguration().getLogger(alias);
-      return logger;
-    }
+    std::shared_ptr<Logger> logger = LoggerConfiguration::getConfiguration().getLogger(alias);
+    return logger;
+  }
 };
 
-} /* namespace logging */
-} /* namespace core */
-} /* namespace minifi */
-} /* namespace nifi */
-} /* namespace apache */
-} /* namespace org */
+}  // namespace logging
+}  // namespace core
+}  // namespace minifi
+}  // namespace nifi
+}  // namespace apache
+}  // namespace org
 
-#endif
+#endif  // LIBMINIFI_INCLUDE_CORE_LOGGING_LOGGERCONFIGURATION_H_

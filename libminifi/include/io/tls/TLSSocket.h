@@ -15,16 +15,22 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#ifndef LIBMINIFI_INCLUDE_IO_TLSSOCKET_H_
-#define LIBMINIFI_INCLUDE_IO_TLSSOCKET_H_
+#ifndef LIBMINIFI_INCLUDE_IO_TLS_TLSSOCKET_H_
+#define LIBMINIFI_INCLUDE_IO_TLS_TLSSOCKET_H_
 
-#include <openssl/ssl.h>
 #include <openssl/err.h>
-#include "controllers/SSLContextService.h"
+#include <openssl/ssl.h>
+
 #include <atomic>
 #include <cstdint>
-#include "io/ClientSocket.h"
+#include <map>
+#include <memory>
+#include <string>
+#include <vector>
+
+#include "controllers/SSLContextService.h"
 #include "core/expect.h"
+#include "io/ClientSocket.h"
 #include "properties/Configure.h"
 
 namespace org {
@@ -33,6 +39,7 @@ namespace nifi {
 namespace minifi {
 namespace io {
 
+#define TLS_GOOD 0
 #define TLS_ERROR_CONTEXT 1
 #define TLS_ERROR_PEM_MISSING 2
 #define TLS_ERROR_CERT_MISSING 3
@@ -42,18 +49,8 @@ namespace io {
 class OpenSSLInitializer {
  public:
   static OpenSSLInitializer *getInstance() {
-    OpenSSLInitializer* atomic_context = context_instance.load(std::memory_order_relaxed);
-    std::atomic_thread_fence(std::memory_order_acquire);
-    if (atomic_context == nullptr) {
-      std::lock_guard<std::mutex> lock(context_mutex);
-      atomic_context = context_instance.load(std::memory_order_relaxed);
-      if (atomic_context == nullptr) {
-        atomic_context = new OpenSSLInitializer();
-        std::atomic_thread_fence(std::memory_order_release);
-        context_instance.store(atomic_context, std::memory_order_relaxed);
-      }
-    }
-    return atomic_context;
+    static OpenSSLInitializer openssl_initializer;
+    return &openssl_initializer;
   }
 
   OpenSSLInitializer() {
@@ -61,23 +58,16 @@ class OpenSSLInitializer {
     OpenSSL_add_all_algorithms();
     SSL_load_error_strings();
   }
- private:
-  static std::atomic<OpenSSLInitializer*> context_instance;
-  static std::mutex context_mutex;
 };
 
 class TLSContext : public SocketContext {
-
  public:
-  TLSContext(const std::shared_ptr<Configure> &configure, const std::shared_ptr<minifi::controllers::SSLContextService> &ssl_service = nullptr);
+  TLSContext(const std::shared_ptr<Configure> &configure, std::shared_ptr<minifi::controllers::SSLContextService> ssl_service = nullptr); // NOLINT
 
-  virtual ~TLSContext() {
-    if (0 != ctx)
-      SSL_CTX_free(ctx);
-  }
+  virtual ~TLSContext() = default;
 
   SSL_CTX *getContext() {
-    return ctx;
+    return ctx.get();
   }
 
   int16_t getError() {
@@ -87,31 +77,18 @@ class TLSContext : public SocketContext {
   int16_t initialize(bool server_method = false);
 
  private:
-
-  static int pemPassWordCb(char *buf, int size, int rwflag, void *userdata) {
-
-    std::string *pass = (std::string*) userdata;
-    if (pass->length() > 0) {
-
-      memset(buf, 0x00, size);
-      memcpy(buf, pass->c_str(), pass->length() - 1);
-
-      return pass->length() - 1;
-    }
-    return 0;
-  }
+  static void deleteContext(SSL_CTX* ptr) { SSL_CTX_free(ptr); }
 
   std::shared_ptr<logging::Logger> logger_;
   std::shared_ptr<Configure> configure_;
   std::shared_ptr<minifi::controllers::SSLContextService> ssl_service_;
-  SSL_CTX *ctx;
+  std::unique_ptr<SSL_CTX, decltype(&deleteContext)> ctx;
 
   int16_t error_value;
 };
 
 class TLSSocket : public Socket {
  public:
-
   /**
    * Constructor that accepts host name, port and listeners. With this
    * contructor we will be creating a server socket
@@ -120,7 +97,7 @@ class TLSSocket : public Socket {
    * @param port connecting port
    * @param listeners number of listeners in the queue
    */
-  explicit TLSSocket(const std::shared_ptr<TLSContext> &context, const std::string &hostname, const uint16_t port, const uint16_t listeners);
+  explicit TLSSocket(const std::shared_ptr<TLSContext> &context, const std::string &hostname, uint16_t port, uint16_t listeners);
 
   /**
    * Constructor that creates a client socket.
@@ -128,12 +105,14 @@ class TLSSocket : public Socket {
    * @param hostname hostname we are connecting to.
    * @param port port we are connecting to.
    */
-  explicit TLSSocket(const std::shared_ptr<TLSContext> &context, const std::string &hostname, const uint16_t port);
+  explicit TLSSocket(const std::shared_ptr<TLSContext> &context, const std::string &hostname, uint16_t port);
 
   /**
    * Move constructor.
    */
-  explicit TLSSocket(const TLSSocket &&);
+  TLSSocket(TLSSocket &&);
+
+  TLSSocket& operator=(TLSSocket&&);
 
   virtual ~TLSSocket();
 
@@ -141,7 +120,7 @@ class TLSSocket : public Socket {
    * Initializes the socket
    * @return result of the creation operation.
    */
-  int16_t initialize(){
+  int16_t initialize() {
     return initialize(true);
   }
 
@@ -152,7 +131,7 @@ class TLSSocket : public Socket {
    * @param msec timeout interval to wait
    * @returns file descriptor
    */
-  virtual int16_t select_descriptor(const uint16_t msec);
+  virtual int16_t select_descriptor(uint16_t msec);
 
   virtual int readData(std::vector<uint8_t> &buf, int buflen);
 
@@ -183,35 +162,33 @@ class TLSSocket : public Socket {
    */
   int writeData(uint8_t *value, int size);
 
- protected:
+  void closeStream();  // override
 
+ protected:
   int writeData(uint8_t *value, int size, int fd);
 
   SSL *get_ssl(int fd) {
     if (UNLIKELY(listeners_ > 0)) {
       std::lock_guard<std::mutex> lock(ssl_mutex_);
       return ssl_map_[fd];
-    }
-    else{
+    } else {
       return ssl_;
     }
   }
 
   void close_ssl(int fd);
-  std::atomic<bool> connected_;
+
+  std::atomic<bool> connected_{ false };
   std::shared_ptr<TLSContext> context_;
-  SSL* ssl_;
+  SSL* ssl_{ nullptr };
   std::mutex ssl_mutex_;
   std::map<int, SSL*> ssl_map_;
-
- private:
-  std::shared_ptr<logging::Logger> logger_;
 };
 
-} /* namespace io */
-} /* namespace minifi */
-} /* namespace nifi */
-} /* namespace apache */
-} /* namespace org */
+}  // namespace io
+}  // namespace minifi
+}  // namespace nifi
+}  // namespace apache
+}  // namespace org
 
-#endif /* LIBMINIFI_INCLUDE_IO_TLSSOCKET_H_ */
+#endif  // LIBMINIFI_INCLUDE_IO_TLS_TLSSOCKET_H_

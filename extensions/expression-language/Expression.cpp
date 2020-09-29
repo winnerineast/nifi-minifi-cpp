@@ -26,6 +26,7 @@
 #include "rapidjson/document.h"
 
 #include <utils/StringUtils.h>
+#include <utils/OsUtils.h>
 #include <expression/Expression.h>
 #include <regex>
 #ifndef DISABLE_CURL
@@ -39,13 +40,15 @@
 #endif
 #include <Windows.h>
 #include <WS2tcpip.h>
+#include <sddl.h>
 #pragma comment(lib, "Ws2_32.lib")
 #else
 #include <netdb.h>
 #include <arpa/inet.h>
+#include <sys/types.h>
 #endif
 
-#include "base64.h"
+#include "utils/StringUtils.h"
 #include "Driver.h"
 
 #ifdef EXPRESSION_LANGUAGE_USE_DATE
@@ -89,6 +92,18 @@ Expression make_dynamic_attr(const std::string &attribute_id) {
     }
     return Value();
   });
+}
+
+Value resolve_user_id(const std::vector<Value> &args) {
+	std::string name;
+	if (args.size() == 1) {
+		name = args[0].asString();
+		if (!name.empty()) {
+			name = minifi::utils::OsUtils::userIdToUsername(name);
+		}
+	}
+
+	return Value(name);
 }
 
 Value expr_hostname(const std::vector<Value> &args) {
@@ -694,30 +709,11 @@ Value expr_urlDecode(const std::vector<Value> &args) {
 }
 
 Value expr_base64Encode(const std::vector<Value> &args) {
-  auto arg_0 = args[0].asString();
-  char *b64_out = nullptr;
-  auto b64_len = Curl_base64_encode(arg_0.c_str(), arg_0.length(), &b64_out);
-  if (b64_out) {
-    std::string result(b64_out, b64_len);
-    free(b64_out);
-    return Value(result);
-  } else {
-    throw std::runtime_error("Failed to encode base64");
-  }
+  return Value(utils::StringUtils::to_base64(args[0].asString()));
 }
 
 Value expr_base64Decode(const std::vector<Value> &args) {
-  auto arg_0 = args[0].asString();
-  unsigned char *decode_out = nullptr;
-  // size_t Curl_base64_decode(const char *src, unsigned char **outptr)
-  auto out_len = Curl_base64_decode(arg_0.c_str(), &decode_out);
-  if (decode_out) {
-    std::string result(reinterpret_cast<char *>(decode_out), out_len);
-    free(decode_out);
-    return Value(result);
-  } else {
-    throw std::runtime_error("Failed to encode base64");
-  }
+  return Value(utils::StringUtils::from_base64(args[0].asString()));
 }
 
 #ifdef EXPRESSION_LANGUAGE_USE_REGEX
@@ -1345,6 +1341,8 @@ Expression make_join(const std::string &function_name, const std::vector<Express
 Expression make_dynamic_function(const std::string &function_name, const std::vector<Expression> &args) {
   if (function_name == "hostname") {
     return make_dynamic_function_incomplete<expr_hostname>(function_name, args, 0);
+  } else if (function_name == "resolve_user_id") {
+    return make_dynamic_function_incomplete<resolve_user_id>(function_name, args, 0);
   } else if (function_name == "ip") {
     return make_dynamic_function_incomplete<expr_ip>(function_name, args, 0);
   } else if (function_name == "UUID") {

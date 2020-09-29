@@ -44,17 +44,14 @@ class CivetStream : public io::BaseStream {
 
   }
 
-  virtual ~CivetStream() {
-  }
+  ~CivetStream() override = default;
   /**
    * Skip to the specified offset.
    * @param offset offset to which we will skip
    */
-  void seek(uint64_t offset){
+  void seek(uint64_t offset) override { }
 
-  }
-
-  const uint64_t getSize() const {
+  const uint64_t getSize() const override {
     return BaseStream::readBuffer;
   }
 
@@ -64,14 +61,18 @@ class CivetStream : public io::BaseStream {
    * @param buf buffer in which we extract data
    * @param buflen
    */
-  virtual int readData(std::vector<uint8_t> &buf, int buflen) {
-    if (buf.capacity() < buflen) {
+  int readData(std::vector<uint8_t> &buf, int buflen) override {
+    if (buflen < 0) {
+      throw minifi::Exception{ExceptionType::GENERAL_EXCEPTION, "negative buflen"};
+    }
+
+    if (buf.size() < buflen) {
       buf.resize(buflen);
     }
-    int ret = readData(reinterpret_cast<uint8_t*>(&buf[0]), buflen);
+    int ret = readData(buf.data(), buflen);
 
     if (ret < buflen) {
-      buf.resize(ret);
+      buf.resize((std::max)(ret, 0));
     }
     return ret;
   }
@@ -81,7 +82,7 @@ class CivetStream : public io::BaseStream {
    * @param buf buffer in which we extract data
    * @param buflen
    */
-  virtual int readData(uint8_t *buf, int buflen) {
+  int readData(uint8_t *buf, int buflen) override {
     return mg_read(conn,buf,buflen);
   }
 
@@ -100,27 +101,23 @@ class CivetStream : public io::BaseStream {
    * @param value value to write
    * @param size size of value
    */
-  virtual int writeData(uint8_t *value, int size) {
+  int writeData(uint8_t *value, int size) override {
     return 0;
   }
 
  protected:
 
   /**
-   * Creates a vector and returns the vector using the provided
-   * type name.
+   * Populates the vector using the provided type name.
+   * @param buf output buffer
    * @param t incoming object
-   * @returns vector.
+   * @returns number of bytes read
    */
   template<typename T>
-  inline std::vector<uint8_t> readBuffer(const T& t) {
-    std::vector<uint8_t> buf;
+  inline int readBuffer(std::vector<uint8_t>& buf, const T& t) {
     buf.resize(sizeof t);
-    readData(reinterpret_cast<uint8_t *>(&buf[0]), sizeof(t));
-    return buf;
+    return readData(reinterpret_cast<uint8_t *>(&buf[0]), sizeof(t));
   }
-
-  void reset();
 
   //size_t pos;
   struct mg_connection *conn;

@@ -89,6 +89,12 @@ active_pid() {
   fi
 }
 
+endnow() {
+   echo "Killing MiNiFi..."
+   kill -9 ${saved_pid} > /dev/null 2>&1
+   
+}
+
 install() {
     detectOS
 
@@ -136,7 +142,7 @@ cat <<SERVICEDESCRIPTOR > ${SVC_FILE}
 export MINIFI_HOME=${MINIFI_HOME}
 bin_dir=\${MINIFI_HOME}/bin
 minifi_executable=\${bin_dir}/minifi
-pid_file=${bin_dir}/.minifi.pid
+pid_file="\${bin_dir}/.minifi.pid"
 
 # determines the pid
 get_pid() {
@@ -144,7 +150,7 @@ get_pid() {
   pid=-1
   # Check to see if we have a pid file
   if [ -f \${pid_file} ]; then
-    pid=\$(cat ${pid_file})
+    pid=\$(cat "\${pid_file}")
   fi
   echo \${pid}
 }
@@ -186,8 +192,8 @@ case "\$1" in
         echo "MiNiFi is not currently running."
       else
         echo "Stopping MiNiFi (PID: \${saved_pid})."
-        # Send a SIGINT to MiNiFi so that the handler begins shutdown.
-        kill -2 \${saved_pid} > /dev/null 2>&1
+        # Send a SIGTERM to MiNiFi so that the handler begins shutdown.
+        kill -15 \${saved_pid} > /dev/null 2>&1
         if [ \$? -ne 0 ]; then
           echo "Could not successfully send termination signal to MiNiFi (PID: \${saved_pid})"
           exit 1;
@@ -250,10 +256,23 @@ case "\$1" in
 		fi
         ;;
     restart)
-        echo Restarting MiNiFi service
-        \${bin_dir}/minifi.sh stop
-        \${bin_dir}/minifi.sh start
-        ;;
+      echo "Restarting the MiNiFi service. Hit CTRL+C at any time to forcibly terminate MiNiFi"
+      "\${bin_dir}/minifi.sh" stop
+      ticks=1
+      printf "Waiting for process to terminate."
+      trap endnow INT
+      if [ "\${saved_pid}" -gt 0 ]; then
+        while [ "\$(active_pid \${saved_pid})" -eq 0 ]; do
+                sleep 1
+                ticks="\$((ticks+1))"
+                numticks="\$((ticks % 5))"
+                if [ "\${numticks}"  -eq 0 ]; then
+                        printf "."
+                fi
+        done
+      fi
+      "\${bin_dir}/minifi.sh" start
+	;;
     *)
         echo "Usage: service minifi {start|stop|restart|status}"
         ;;
@@ -302,8 +321,8 @@ case "$1" in
         echo "MiNiFi is not currently running."
       else
         echo "Stopping MiNiFi (PID: ${saved_pid})."
-        # Send a SIGINT to MiNiFi so that the handler begins shutdown.
-        kill -2 ${saved_pid} > /dev/null 2>&1
+        # Send a SIGTERM to MiNiFi so that the handler begins shutdown.
+        kill -15 ${saved_pid} > /dev/null 2>&1
         if [ $? -ne 0 ]; then
           echo "Could not successfully send termination signal to MiNiFi (PID: ${saved_pid})"
           exit 1;
@@ -362,8 +381,21 @@ case "$1" in
 		fi
         ;;
     restart)
-      echo Restarting MiNiFi service
+      echo "Restarting MiNiFi. Hit CTRL+C at any time to forcibly terminate MiNiFi"
       ${bin_dir}/minifi.sh stop
+      ticks=1
+      printf "Waiting for process to terminate."
+      trap endnow INT
+      if [ "${saved_pid}" -gt 0 ]; then
+      	while [ $(active_pid ${saved_pid}) -eq 0 ]; do
+  		sleep 1
+		ticks=$((ticks+1))
+		numticks=$(($ticks % 5))
+		if [ "${numticks}"  -eq 0 ]; then
+			printf "."
+		fi
+        done
+      fi
       ${bin_dir}/minifi.sh start
       ;;
     install)

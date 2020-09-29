@@ -18,6 +18,10 @@
 
 script_directory="$(cd "$(dirname "$0")" && pwd)"
 
+CMAKE_GLOBAL_MIN_VERSION_MAJOR=3
+CMAKE_GLOBAL_MIN_VERSION_MINOR=7
+CMAKE_GLOBAL_MIN_VERSION_REVISION=0
+
 #RED='\033[0;41;30m'
 RED='\033[0;101m'
 NO_COLOR='\033[0;0;39m'
@@ -38,13 +42,14 @@ OPTIONS=()
 CMAKE_OPTIONS_ENABLED=()
 CMAKE_OPTIONS_DISABLED=()
 CMAKE_MIN_VERSION=()
+INCOMPATIBLE_WITH=()
 DEPLOY_LIMITS=()
 USER_DISABLE_TESTS="${FALSE}"
-
+USE_NINJA="false"
 DEPENDENCIES=()
 
 . "${script_directory}/bstrp_functions.sh"
-
+SKIP_CMAKE=${FALSE}
 MENU="features"
 GUIDED_INSTALL=${FALSE}
 while :; do
@@ -54,6 +59,9 @@ while :; do
       ;;
     -s|--skiptests)
       USER_DISABLE_TESTS="${TRUE}"
+      ;;
+    -g|--useninja)
+      USE_NINJA="${TRUE}"
       ;;
     -e|--enableall)
       NO_PROMPT="true"
@@ -75,6 +83,7 @@ while :; do
     -t|--travis)
       NO_PROMPT="true"
       FEATURES_SELECTED="true"
+      SKIP_CMAKE="${TRUE}"
       ;;
     -p|--package)
       CORES=$(grep -c ^processor /proc/cpuinfo 2>/dev/null || sysctl -n hw.ncpu)
@@ -211,26 +220,31 @@ elif [ -x "$(command -v cmake)" ]; then
   CMAKE_COMMAND="cmake"
 fi
 
-if [ -z "${CMAKE_COMMAND}" ]; then
-  echo "CMAKE is not installed, attempting to install it..."
+if [ -n "${CMAKE_COMMAND}" ]; then
+  get_cmake_version
+fi
+
+if [ -z "${CMAKE_COMMAND}" ] ||
+   [ "$CMAKE_MAJOR" -lt "$CMAKE_GLOBAL_MIN_VERSION_MAJOR" ] ||
+   [ "$CMAKE_MINOR" -lt "$CMAKE_GLOBAL_MIN_VERSION_MINOR" ] ||
+   [ "$CMAKE_REVISION" -lt "$CMAKE_GLOBAL_MIN_VERSION_REVISION" ]; then
+  echo "CMake is not installed or too old, attempting to install it..."
   bootstrap_cmake
   if [ -x "$(command -v cmake3)" ]; then
     CMAKE_COMMAND="cmake3"
   elif [ -x "$(command -v cmake)" ]; then
     CMAKE_COMMAND="cmake"
   fi
+
+  get_cmake_version
 fi
 
-
-## before we begin, let's ensure that cmake exists
-
-CMAKE_VERSION=`${CMAKE_COMMAND} --version | head -n 1 | awk '{print $3}'`
-
-CMAKE_MAJOR=`echo $CMAKE_VERSION | cut -d. -f1`
-CMAKE_MINOR=`echo $CMAKE_VERSION | cut -d. -f2`
-CMAKE_REVISION=`echo $CMAKE_VERSION | cut -d. -f3`
-
-
+if [ "$CMAKE_MAJOR" -lt "$CMAKE_GLOBAL_MIN_VERSION_MAJOR" ] ||
+   [ "$CMAKE_MINOR" -lt "$CMAKE_GLOBAL_MIN_VERSION_MINOR" ] ||
+   [ "$CMAKE_REVISION" -lt "$CMAKE_GLOBAL_MIN_VERSION_REVISION" ]; then
+  echo "Failed to install or update CMake, exiting..."
+  exit
+fi
 
 add_cmake_option PORTABLE_BUILD ${TRUE}
 add_cmake_option DEBUG_SYMBOLS ${FALSE}
@@ -239,8 +253,6 @@ add_cmake_option BUILD_ROCKSDB ${TRUE}
 add_enabled_option ROCKSDB_ENABLED ${TRUE} "DISABLE_ROCKSDB"
 ## need libcurl installed
 add_enabled_option HTTP_CURL_ENABLED ${TRUE} "DISABLE_CURL"
-add_dependency HTTP_CURL_ENABLED "libcurl"
-add_dependency HTTP_CURL_ENABLED "openssl"
 
 # third party directory
 add_enabled_option LIBARCHIVE_ENABLED ${TRUE} "DISABLE_LIBARCHIVE"
@@ -264,7 +276,9 @@ add_dependency USB_ENABLED "libpng"
 add_disabled_option GPS_ENABLED ${FALSE} "ENABLE_GPS"
 add_dependency GPS_ENABLED "gpsd"
 
-add_disabled_option KAFKA_ENABLED ${FALSE} "ENABLE_LIBRDKAFKA" "3.4.0"
+add_disabled_option AWS_ENABLED ${FALSE} "ENABLE_AWS"
+
+add_disabled_option KAFKA_ENABLED ${FALSE} "ENABLE_LIBRDKAFKA"
 
 add_disabled_option MQTT_ENABLED ${FALSE} "ENABLE_MQTT"
 
@@ -277,21 +291,40 @@ add_dependency COAP_ENABLED "autoconf"
 add_dependency COAP_ENABLED "libtool"
 
 add_disabled_option JNI_ENABLED ${FALSE} "ENABLE_JNI"
+add_dependency JNI_ENABLED "jnibuild"
 
-TESTS_DISABLED=${FALSE}
+add_disabled_option OPENCV_ENABLED ${FALSE} "ENABLE_OPENCV"
+
+add_disabled_option OPENCV_ENABLED ${FALSE} "ENABLE_OPENCV"
+
+add_disabled_option SFTP_ENABLED ${FALSE} "ENABLE_SFTP"
+add_dependency SFTP_ENABLED "libssh2"
 
 add_disabled_option SQLITE_ENABLED ${FALSE} "ENABLE_SQLITE"
 
-USE_SHARED_LIBS=${TRUE} 
+add_disabled_option SQL_ENABLED ${FALSE} "ENABLE_SQL"
+set_incompatible_with SQL_ENABLED SQLITE_ENABLED
 
+add_disabled_option OPENWSMAN_ENABLED ${FALSE} "ENABLE_OPENWSMAN"
 
 # Since the following extensions have limitations on
-
 add_disabled_option BUSTACHE_ENABLED ${FALSE} "ENABLE_BUSTACHE" "2.6" ${TRUE}
 add_dependency BUSTACHE_ENABLED "boost"
+
 ## currently need to limit on certain platforms
 add_disabled_option TENSORFLOW_ENABLED ${FALSE} "ENABLE_TENSORFLOW" "2.6" ${TRUE}
 add_dependency TENSORFLOW_ENABLED "tensorflow"
+
+add_disabled_option OPC_ENABLED ${FALSE} "ENABLE_OPC"
+add_dependency OPC_ENABLED "mbedtls"
+
+USE_SHARED_LIBS=${TRUE}
+TESTS_DISABLED=${FALSE}
+
+## name, default, values
+add_multi_option BUILD_PROFILE "RelWithDebInfo" "RelWithDebInfo" "Debug" "MinSizeRel" "Release"
+
+add_disabled_option ASAN_ENABLED ${FALSE} "ASAN_BUILD"
 
 if [ "$GUIDED_INSTALL" == "${TRUE}" ]; then
   EnableAllFeatures
@@ -371,6 +404,11 @@ CMAKE_REVISION=`echo $CMAKE_VERSION | cut -d. -f3`
 
 CMAKE_BUILD_COMMAND="${CMAKE_COMMAND} "
 
+if [ "${USE_NINJA}" = "${TRUE}" ]; then 
+	 echo "use ninja"
+   CMAKE_BUILD_COMMAND="${CMAKE_BUILD_COMMAND} -DFORCE_COLORED_OUTPUT=ON -GNinja "
+fi
+
 build_cmake_command(){
 
   for option in "${OPTIONS[@]}" ; do
@@ -440,15 +478,10 @@ build_cmake_command(){
   fi
 
   CMAKE_BUILD_COMMAND="${CMAKE_BUILD_COMMAND} -DBUILD_IDENTIFIER=${BUILD_IDENTIFIER}"
+  
+    CMAKE_BUILD_COMMAND="${CMAKE_BUILD_COMMAND} -DCMAKE_BUILD_TYPE=${BUILD_PROFILE}"
 
   add_os_flags
-
-  curl -V | grep OpenSSL &> /dev/null
-  if [ $? == 0 ]; then
-    echo "Using libcurl-openssl..."
-  else
-    CMAKE_BUILD_COMMAND="${CMAKE_BUILD_COMMAND} -DUSE_CURL_NSS=true .."
-  fi
 
   CMAKE_BUILD_COMMAND="${CMAKE_BUILD_COMMAND} .."
 
@@ -466,7 +499,11 @@ build_cmake_command(){
 build_cmake_command
 
 ### run the cmake command
-${CMAKE_BUILD_COMMAND}
+if [ "${SKIP_CMAKE}" = "${TRUE}" ]; then
+	echo "Not running ${CMAKE_BUILD_COMMAND} "
+else
+	${CMAKE_BUILD_COMMAND}
+fi
 
 if [ "$BUILD" = "true" ]; then
   make -j${CORES}

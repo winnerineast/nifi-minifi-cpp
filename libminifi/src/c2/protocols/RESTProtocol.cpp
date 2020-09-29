@@ -18,14 +18,15 @@
 
 #include "c2/protocols/RESTProtocol.h"
 
-#include "core/TypedValues.h"
 #include <algorithm>
-#include <memory>
-#include <utility>
-#include <map>
-#include <string>
-#include <vector>
 #include <list>
+#include <map>
+#include <memory>
+#include <string>
+#include <utility>
+#include <vector>
+
+#include "core/TypedValues.h"
 
 namespace org {
 namespace apache {
@@ -165,6 +166,10 @@ void setJsonStr(const std::string& key, const state::response::ValueNode& value,
       int value = 0;
       base_type->convertValue(value);
       valueVal.SetInt(value);
+    } else if (type_index == state::response::Value::UINT32_TYPE) {
+      uint32_t value = 0;
+      base_type->convertValue(value);
+      valueVal.SetUint(value);
     } else if (type_index == state::response::Value::INT64_TYPE) {
       int64_t value = 0;
       base_type->convertValue(value);
@@ -256,8 +261,31 @@ std::string RESTProtocol::serializeJsonRootPayload(const C2Payload& payload) {
 
   std::string operationid = payload.getIdentifier();
   if (operationid.length() > 0) {
-    json_payload.AddMember("operationid", getStringValue(operationid, alloc), alloc);
     json_payload.AddMember("operationId", getStringValue(operationid, alloc), alloc);
+    std::string operationStateStr = "FULLY_APPLIED";
+    switch (payload.getStatus().getState()) {
+      case state::UpdateState::FULLY_APPLIED:
+        operationStateStr = "FULLY_APPLIED";
+        break;
+      case state::UpdateState::PARTIALLY_APPLIED:
+        operationStateStr = "PARTIALLY_APPLIED";
+        break;
+      case state::UpdateState::READ_ERROR:
+        operationStateStr = "OPERATION_NOT_UNDERSTOOD";
+        break;
+      case state::UpdateState::SET_ERROR:
+      default:
+        operationStateStr = "NOT_APPLIED";
+    }
+
+    rapidjson::Value opstate(rapidjson::kObjectType);
+
+    opstate.AddMember("state", getStringValue(operationStateStr, alloc), alloc);
+    const auto details = payload.getRawData();
+
+    opstate.AddMember("details", getStringValue(std::string(details.data(), details.size()), alloc), alloc);
+
+    json_payload.AddMember("operationState", opstate, alloc);
     json_payload.AddMember("identifier", getStringValue(operationid, alloc), alloc);
   }
 
@@ -288,19 +316,52 @@ bool RESTProtocol::containsPayload(const C2Payload &o) {
   return false;
 }
 
+rapidjson::Value RESTProtocol::serializeConnectionQueues(const C2Payload &payload, std::string &label, rapidjson::Document::AllocatorType &alloc) {
+  rapidjson::Value json_payload(payload.isContainer() ? rapidjson::kArrayType : rapidjson::kObjectType);
+
+  C2Payload adjusted(payload.getOperation(), payload.getIdentifier(), false, payload.isRaw());
+
+  auto name = payload.getLabel();
+  std::string uuid;
+  C2ContentResponse updatedContent(payload.getOperation());
+  for (const C2ContentResponse &content : payload.getContent()) {
+    for (const auto& op_arg : content.operation_arguments) {
+      if (op_arg.first == "uuid") {
+        uuid = op_arg.second.to_string();
+      }
+      updatedContent.operation_arguments.insert(op_arg);
+    }
+  }
+  updatedContent.name = uuid;
+  adjusted.setLabel(uuid);
+  adjusted.setIdentifier(uuid);
+  state::response::ValueNode nd;
+  // name should be what was previously the TLN ( top level node )
+  nd = name;
+  updatedContent.operation_arguments.insert(std::make_pair("name", nd));
+  // the rvalue reference is an unfortunate side effect of the underlying API decision.
+  adjusted.addContent(std::move(updatedContent), true);
+  mergePayloadContent(json_payload, adjusted, alloc);
+  label = uuid;
+  return json_payload;
+}
+
 rapidjson::Value RESTProtocol::serializeJsonPayload(const C2Payload &payload, rapidjson::Document::AllocatorType &alloc) {
-// get the name from the content
+  // get the name from the content
   rapidjson::Value json_payload(payload.isContainer() ? rapidjson::kArrayType : rapidjson::kObjectType);
 
   std::vector<ValueObject> children;
 
+  bool isQueue = payload.getLabel() == "queues";
+
   for (const auto &nested_payload : payload.getNestedPayloads()) {
-    rapidjson::Value* child_payload = new rapidjson::Value(serializeJsonPayload(nested_payload, alloc));
+    std::string label = nested_payload.getLabel();
+    rapidjson::Value* child_payload = new rapidjson::Value(isQueue ? serializeConnectionQueues(nested_payload, label, alloc) : serializeJsonPayload(nested_payload, alloc));
 
     if (nested_payload.isCollapsible()) {
       bool combine = false;
       for (auto &subordinate : children) {
-        if (subordinate.name == nested_payload.getLabel()) {
+        if (subordinate.name == label) {
           subordinate.values.push_back(child_payload);
           combine = true;
           break;
@@ -308,13 +369,13 @@ rapidjson::Value RESTProtocol::serializeJsonPayload(const C2Payload &payload, ra
       }
       if (!combine) {
         ValueObject obj;
-        obj.name = nested_payload.getLabel();
+        obj.name = label;
         obj.values.push_back(child_payload);
         children.push_back(obj);
       }
     } else {
       ValueObject obj;
-      obj.name = nested_payload.getLabel();
+      obj.name = label;
       obj.values.push_back(child_payload);
       children.push_back(obj);
     }
@@ -402,8 +463,8 @@ Operation RESTProtocol::stringToOperation(const std::string str) {
 #ifdef WIN32
 #pragma pop_macro("GetObject")
 #endif
-} /* namespace c2 */
-} /* namespace minifi */
-} /* namespace nifi */
-} /* namespace apache */
-} /* namespace org */
+}  // namespace c2
+}  // namespace minifi
+}  // namespace nifi
+}  // namespace apache
+}  // namespace org

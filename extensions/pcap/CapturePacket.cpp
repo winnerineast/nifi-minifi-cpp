@@ -17,7 +17,6 @@
  */
 
 #include <regex>
-#include <uuid/uuid.h>
 #include <memory>
 #include <algorithm>
 #include <cctype>
@@ -55,7 +54,7 @@ std::shared_ptr<utils::IdGenerator> CapturePacket::id_generator_ = utils::IdGene
 core::Property CapturePacket::BaseDir(core::PropertyBuilder::createProperty("Base Directory")->withDescription("Scratch directory for PCAP files")->withDefaultValue<std::string>("/tmp/")->build());
 
 core::Property CapturePacket::BatchSize(core::PropertyBuilder::createProperty("Batch Size")->withDescription("The number of packets to combine within a given PCAP")->withDefaultValue<uint64_t>(50)->build());
-core::Property CapturePacket::NetworkController("Network Controller", "Regular expression of the network controller(s) to which we will attach", ".*");
+core::Property CapturePacket::NetworkControllers("Network Controllers", "Regular expression of the network controller(s) to which we will attach", ".*");
 core::Property CapturePacket::CaptureBluetooth(core::PropertyBuilder::createProperty("Capture Bluetooth")->withDescription("True indicates that we support bluetooth interfaces")->withDefaultValue<bool>(false)->build());
 
 const char *CapturePacket::ProcessorName = "CapturePacket";
@@ -116,7 +115,7 @@ void CapturePacket::initialize() {
   // Set the supported properties
   std::set<core::Property> properties;
   properties.insert(BatchSize);
-  properties.insert(NetworkController);
+  properties.insert(NetworkControllers);
   properties.insert(BaseDir);
   properties.insert(CaptureBluetooth);
   setSupportedProperties(properties);
@@ -214,8 +213,7 @@ void CapturePacket::onSchedule(const std::shared_ptr<core::ProcessContext> &cont
   }
 }
 
-CapturePacket::~CapturePacket() {
-}
+CapturePacket::~CapturePacket() = default;
 
 void CapturePacket::onTrigger(const std::shared_ptr<core::ProcessContext> &context, const std::shared_ptr<core::ProcessSession> &session) {
   CapturePacketMechanism *capture;

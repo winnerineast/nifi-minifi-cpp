@@ -18,6 +18,14 @@
 
 script_directory="$(cd "$(dirname "$0")" && pwd)"
 
+get_cmake_version(){
+  CMAKE_VERSION=`${CMAKE_COMMAND} --version | head -n 1 | awk '{print $3}'`
+
+  CMAKE_MAJOR=`echo $CMAKE_VERSION | cut -d. -f1`
+  CMAKE_MINOR=`echo $CMAKE_VERSION | cut -d. -f2`
+  CMAKE_REVISION=`echo $CMAKE_VERSION | cut -d. -f3`
+}
+
 add_option(){
   eval "$1=$2"
   OPTIONS+=("$1")
@@ -48,6 +56,72 @@ add_disabled_option(){
     fi
   fi
 }
+
+add_multi_option(){
+  eval "$1=$2"
+  ARRAY=()
+  eval "export $1_OPTIONS=()"
+  for i in "${@:3}"; do
+    ARRAY+=($i)
+  done
+  for i in ${!ARRAY[@]}; do
+    eval "$1_OPTIONS[$i]=${ARRAY[$i]}"
+	done
+}
+
+set_incompatible_with(){
+  INCOMPATIBLE_WITH+=("$1:$2")
+  INCOMPATIBLE_WITH+=("$2:$1")
+}
+
+print_multi_option_status(){
+  feature="$1"
+  feature_status=${!1}
+  declare -a VAR_OPTS=()
+  
+  declare VAR_OPTS=$1_OPTIONS[@]
+  VAR_OPTS=$1_OPTIONS[@]
+
+  for option in "${!VAR_OPTS}" ; do
+    if [ "${option}" = "$feature_status" ]; then
+    	printf "${RED}"
+    fi
+    printf "${option}"
+    printf "${NO_COLOR} "
+  done
+}
+
+ToggleMultiOption(){
+  feature="$1"
+  feature_status=${!1}
+  declare -a VAR_OPTS=()
+  
+  declare VAR_OPTS=$1_OPTIONS[@]
+  #echo -e "${RED}${feature_status}${NO_COLOR} (${VAR_OPTS_VAL})"
+  VAR_OPTS=$1_OPTIONS[@]
+  invariant=""
+  first=""
+  # the alternative is to loop through an array but since we're an indirected
+  # copy, we'll treat this as a manual circular buffer
+  for option in "${!VAR_OPTS}" ; do
+  if [ -z "${first}"  ]; then
+  	first=${option}
+  fi
+   if [ "${invariant}" = "next" ]; then
+    	eval "$1=${option}"
+    	invariant=""
+    	break
+    fi
+    if [ "${option}" = "$feature_status" ]; then
+    	invariant="next"
+    fi
+  done
+  if [ "${invariant}" = "next" ]; then
+  	eval "$1=${first}"
+  fi
+}
+
+
 
 add_dependency(){
   DEPENDENCIES+=("$1:$2")
@@ -93,10 +167,35 @@ save_state(){
   echo_state_variable BUILD_IDENTIFIER
   echo_state_variable BUILD_DIR
   echo_state_variable TESTS_DISABLED
+  echo_state_variable BUILD_PROFILE
   echo_state_variable USE_SHARED_LIBS
   for option in "${OPTIONS[@]}" ; do
     echo_state_variable $option
   done
+}
+
+check_compatibility(){
+  for option in "${INCOMPATIBLE_WITH[@]}" ; do
+    OPT=${option%%:*}
+    if [ "$OPT" = "$1" ]; then
+      OTHER_FEATURE=${option#*:}
+      OTHER_FEATURE_VALUE=${!OTHER_FEATURE}
+      if [ $OTHER_FEATURE_VALUE = "Enabled" ]; then
+        echo "false"
+        return
+      fi
+    fi
+  done
+  echo "true"
+}
+
+verify_enable(){
+  COMPATIBLE=$(check_compatibility $1)
+  if [ "$COMPATIBLE" = "true" ]; then
+    verify_enable_platform $1
+  else
+    echo "false"
+  fi
 }
 
 can_deploy(){
@@ -186,6 +285,7 @@ print_feature_status(){
 }
 
 
+
 show_main_menu() {
   clear
   echo "****************************************"
@@ -259,6 +359,12 @@ show_supported_features() {
   echo "M. SQLite Support ..............$(print_feature_status SQLITE_ENABLED)"
   echo "N. Python Support ..............$(print_feature_status PYTHON_ENABLED)"
   echo "O. COAP Support ................$(print_feature_status COAP_ENABLED)"
+  echo "S. SFTP Support ................$(print_feature_status SFTP_ENABLED)"
+  echo "V. AWS Support .................$(print_feature_status AWS_ENABLED)"
+  echo "T. OpenCV Support ..............$(print_feature_status OPENCV_ENABLED)"
+  echo "U. OPC-UA Support...............$(print_feature_status OPC_ENABLED)"
+  echo "W. SQL Support..................$(print_feature_status SQL_ENABLED)"
+  echo "X. Openwsman Support ...........$(print_feature_status OPENWSMAN_ENABLED)"
   echo "****************************************"
   echo "            Build Options."
   echo "****************************************"
@@ -266,18 +372,21 @@ show_supported_features() {
   echo "2. Enable all extensions"
   echo "3. Enable JNI Support ..........$(print_feature_status JNI_ENABLED)"
   echo "4. Use Shared Dependency Links .$(print_feature_status USE_SHARED_LIBS)"
+  echo "5. Build Profile ...............$(print_multi_option_status BUILD_PROFILE)"
+  echo "6. Create ASAN build ...........$(print_feature_status ASAN_ENABLED)"
   echo "P. Continue with these options"
   if [ "$GUIDED_INSTALL" = "${TRUE}" ]; then
     echo "R. Return to Main Menu"
   fi
   echo "Q. Quit"
   echo "* Extension cannot be installed due to"
-  echo -e "  version of cmake or other software\r\n"
+  echo "  version of cmake or other software, or"
+  echo -e "  incompatibility with other extensions\r\n"
 }
 
 read_feature_options(){
   local choice
-  read -p "Enter choice [ A - P or 1-3 ] " choice
+  read -p "Enter choice [ A - X or 1-6 ] " choice
   choice=$(echo ${choice} | tr '[:upper:]' '[:lower:]')
   case $choice in
     a) ToggleFeature ROCKSDB_ENABLED ;;
@@ -293,6 +402,7 @@ read_feature_options(){
     k) ToggleFeature BUSTACHE_ENABLED ;;
     l) ToggleFeature MQTT_ENABLED ;;
     m) ToggleFeature SQLITE_ENABLED ;;
+    v) ToggleFeature AWS_ENABLED ;;
     n) if [ "$USE_SHARED_LIBS" = "${TRUE}" ]; then
          ToggleFeature PYTHON_ENABLED
        else
@@ -300,6 +410,11 @@ read_feature_options(){
    	   fi
    	   ;;
     o) ToggleFeature COAP_ENABLED ;;
+	s) ToggleFeature SFTP_ENABLED ;;
+    t) ToggleFeature OPENCV_ENABLED ;;
+    u) ToggleFeature OPC_ENABLED ;;
+    w) ToggleFeature SQL_ENABLED ;;
+    x) ToggleFeature OPENWSMAN_ENABLED ;;
     1) ToggleFeature TESTS_DISABLED ;;
     2) EnableAllFeatures ;;
     3) ToggleFeature JNI_ENABLED;;
@@ -309,13 +424,15 @@ read_feature_options(){
          echo -e "${RED}Python support must be disabled before changing this value...${NO_COLOR}" && sleep 2
    	   fi
        ;;
+    5) ToggleMultiOption BUILD_PROFILE;;
+    6) ToggleFeature ASAN_ENABLED;;
     p) FEATURES_SELECTED="true" ;;
     r) if [ "$GUIDED_INSTALL" = "${TRUE}" ]; then
         MENU="main"
       fi
       ;;
     q) exit 0;;
-    *) echo -e "${RED}Please enter an option A-P or 1-4...${NO_COLOR}" && sleep 2
+    *) echo -e "${RED}Please enter an option A-X or 1-6...${NO_COLOR}" && sleep 2
   esac
 }
 

@@ -15,28 +15,30 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#ifndef __PROPERTY_H__
-#define __PROPERTY_H__
+#ifndef LIBMINIFI_INCLUDE_CORE_PROPERTY_H_
+#define LIBMINIFI_INCLUDE_CORE_PROPERTY_H_
 
+#include <cmath>
+#include <cstdlib>
 #include <algorithm>
-#include "core/Core.h"
-#include "PropertyValidation.h"
-#include <sstream>
-#include <typeindex>
-#include <string>
-#include <vector>
-#include <queue>
 #include <map>
 #include <memory>
 #include <mutex>
-#include <atomic>
-#include <functional>
+#include <queue>
 #include <set>
-#include <stdlib.h>
-#include <math.h>
+#include <sstream>
+#include <string>
+#include <typeindex>
+#include <utility>
+#include <vector>
 
+#include "CachedValueValidator.h"
+#include "core/Core.h"
+#include "PropertyValidation.h"
 #include "PropertyValue.h"
 #include "utils/StringUtils.h"
+#include "utils/TimeUtil.h"
+#include "utils/gsl.h"
 
 namespace org {
 namespace apache {
@@ -47,10 +49,12 @@ namespace core {
 class PropertyBuilder;
 
 class Property {
-
  public:
   /*!
    * Create a new property
+   * Pay special attention to when value is "true" or "false"
+   * as they will get coerced to the bool true and false, causing
+   * further overwrites to inherit the bool validator.
    */
   Property(std::string name, std::string description, std::string value, bool is_required, std::string valid_regex, std::vector<std::string> dependent_properties,
            std::vector<std::pair<std::string, std::string>> exclusive_of_properties)
@@ -82,9 +86,7 @@ class Property {
         is_required_(false),
         is_collection_(true),
         supports_el_(false),
-        is_transient_(false) {
-    validator_ = StandardValidators::VALID;
-  }
+        is_transient_(false) {}
 
   Property(Property &&other) = default;
 
@@ -96,9 +98,7 @@ class Property {
         is_required_(false),
         is_collection_(false),
         supports_el_(false),
-        is_transient_(false) {
-    validator_ = StandardValidators::VALID;
-  }
+        is_transient_(false) {}
 
   virtual ~Property() = default;
 
@@ -128,40 +128,33 @@ class Property {
 
   template<typename T = std::string>
   void setValue(const T &value) {
-    PropertyValue vn = default_value_;
-    vn = value;
-    if (validator_) {
-      vn.setValidator(validator_);
-      ValidationResult result = validator_->validate(name_, vn.getValue());
-      if (!result.valid()) {
-        // throw some exception?
-      }
-    } else {
-      vn.setValidator(core::StandardValidators::VALID);
-    }
     if (!is_collection_) {
       values_.clear();
-      values_.push_back(vn);
+      values_.push_back(default_value_);
     } else {
-      values_.push_back(vn);
+      values_.push_back(default_value_);
+    }
+    PropertyValue& vn = values_.back();
+    vn.setValidator(validator_);
+    vn = value;
+    ValidationResult result = vn.validate(name_);
+    if (!result.valid()) {
+      throw utils::internal::InvalidValueException(name_ + " value validation failed");
     }
   }
 
-  void setValue(PropertyValue &vn) {
-    if (validator_) {
-      vn.setValidator(validator_);
-      ValidationResult result = validator_->validate(name_, vn.getValue());
-      if (!result.valid()) {
-        // throw some exception?
-      }
-    } else {
-      vn.setValidator(core::StandardValidators::VALID);
-    }
+  void setValue(PropertyValue &newValue) {
     if (!is_collection_) {
       values_.clear();
-      values_.push_back(vn);
+      values_.push_back(newValue);
     } else {
-      values_.push_back(vn);
+      values_.push_back(newValue);
+    }
+    PropertyValue& vn = values_.back();
+    vn.setValidator(validator_);
+    ValidationResult result = vn.validate(name_);
+    if (!result.valid()) {
+      throw utils::internal::InvalidValueException(name_ + " value validation failed");
     }
   }
   void setSupportsExpressionLanguage(bool supportEl);
@@ -173,6 +166,11 @@ class Property {
   void addAllowedValue(const PropertyValue &value) {
     allowed_values_.push_back(value);
   }
+
+  void clearAllowedValues() {
+    allowed_values_.clear();
+  }
+
   /**
    * Add value to the collection of values.
    */
@@ -299,12 +297,13 @@ class Property {
       timeunit = DAY;
       output = ival;
       return true;
-    } else
+    } else {
       return false;
+    }
   }
 
 // Convert String
-  static bool StringToTime(std::string input, int64_t &output, TimeUnit &timeunit) {
+  static bool StringToTime(const std::string& input, int64_t &output, TimeUnit &timeunit) {
     if (input.size() == 0) {
       return false;
     }
@@ -353,8 +352,70 @@ class Property {
       timeunit = DAY;
       output = ival;
       return true;
-    } else
+    } else {
       return false;
+    }
+  }
+
+  static bool StringToDateTime(const std::string& input, int64_t& output) {
+    int64_t temp = parseDateTimeStr(input);
+    if (temp == -1) {
+      return false;
+    }
+    output = temp;
+    return true;
+  }
+
+  static bool StringToPermissions(const std::string& input, uint32_t& output) {
+    uint32_t temp = 0U;
+    if (input.size() == 9U) {
+      /* Probably rwxrwxrwx formatted */
+      for (size_t i = 0; i < 3; i++) {
+        if (input[i * 3] == 'r') {
+          temp |= 04 << ((2 - i) * 3);
+        } else if (input[i * 3] != '-') {
+          return false;
+        }
+        if (input[i * 3 + 1] == 'w') {
+          temp |= 02 << ((2 - i) * 3);
+        } else if (input[i * 3 + 1] != '-') {
+          return false;
+        }
+        if (input[i * 3 + 2] == 'x') {
+          temp |= 01 << ((2 - i) * 3);
+        } else if (input[i * 3 + 2] != '-') {
+          return false;
+        }
+      }
+    } else {
+      /* Probably octal */
+      try {
+        size_t pos = 0U;
+        temp = std::stoul(input, &pos, 8);
+        if (pos != input.size()) {
+          return false;
+        }
+        if ((temp & ~static_cast<uint32_t>(0777)) != 0U) {
+          return false;
+        }
+      } catch (...) {
+        return false;
+      }
+    }
+    output = temp;
+    return true;
+  }
+
+  static bool getTimeMSFromString(const std::string& str, uint64_t& valInt) {
+    core::TimeUnit unit;
+    return !str.empty() && StringToTime(str, valInt, unit)
+        && ConvertTimeUnitToMS(valInt, unit, valInt);
+  }
+
+  static bool getTimeMSFromString(const std::string& str, int64_t& valInt) {
+    core::TimeUnit unit;
+    return !str.empty() && StringToTime(str, valInt, unit)
+        && ConvertTimeUnitToMS(valInt, unit, valInt);
   }
 
   // Convert String to Integer
@@ -382,7 +443,6 @@ class Property {
   }
 
  protected:
-
   /**
    * Coerce default values at construction.
    */
@@ -395,7 +455,7 @@ class Property {
       validator_ = StandardValidators::getValidator(ret.getValue());
     } else {
       ret = value;
-      validator_ = StandardValidators::VALID;
+      validator_ = StandardValidators::VALID_VALIDATOR();
     }
     return ret;
   }
@@ -409,7 +469,7 @@ class Property {
   bool is_collection_;
   PropertyValue default_value_;
   std::vector<PropertyValue> values_;
-  std::shared_ptr<PropertyValidator> validator_;
+  gsl::not_null<std::shared_ptr<PropertyValidator>> validator_{StandardValidators::VALID_VALIDATOR()};
   std::string display_name_;
   std::vector<PropertyValue> allowed_values_;
   // types represents the allowable types for this property
@@ -417,10 +477,9 @@ class Property {
   std::vector<std::string> types_;
   bool supports_el_;
   bool is_transient_;
+
  private:
-
   friend class PropertyBuilder;
-
 };
 
 template<typename T>
@@ -428,7 +487,6 @@ class ConstrainedProperty;
 
 class PropertyBuilder : public std::enable_shared_from_this<PropertyBuilder> {
  public:
-
   static std::shared_ptr<PropertyBuilder> createProperty(const std::string &name) {
     std::shared_ptr<PropertyBuilder> builder = std::unique_ptr<PropertyBuilder>(new PropertyBuilder());
     builder->prop.name_ = name;
@@ -462,8 +520,8 @@ class PropertyBuilder : public std::enable_shared_from_this<PropertyBuilder> {
     prop.default_value_ = df;
 
     if (validator != nullptr) {
-      prop.default_value_.setValidator(validator);
-      prop.validator_ = validator;
+      prop.default_value_.setValidator(gsl::make_not_null(validator));
+      prop.validator_ = gsl::make_not_null(validator);
     } else {
       prop.validator_ = StandardValidators::getValidator(prop.default_value_.getValue());
       prop.default_value_.setValidator(prop.validator_);
@@ -508,19 +566,18 @@ class PropertyBuilder : public std::enable_shared_from_this<PropertyBuilder> {
   }
 
   std::shared_ptr<PropertyBuilder> withExclusiveProperty(const std::string &property, const std::string regex) {
-    prop.exclusive_of_properties_.push_back( { property, regex });
+    prop.exclusive_of_properties_.push_back({ property, regex });
     return shared_from_this();
   }
 
   Property &&build() {
     return std::move(prop);
   }
+
  private:
   Property prop;
 
-  PropertyBuilder() {
-  }
-
+  PropertyBuilder() = default;
 };
 
 template<typename T>
@@ -581,23 +638,21 @@ class ConstrainedProperty : public std::enable_shared_from_this<ConstrainedPrope
     return std::move(prop);
   }
 
-  ConstrainedProperty(const std::shared_ptr<PropertyBuilder> &builder)
+  ConstrainedProperty(const std::shared_ptr<PropertyBuilder> &builder) // NOLINT
       : builder_(builder) {
-
   }
 
  protected:
-
   std::vector<PropertyValue> allowed_values_;
   std::shared_ptr<PropertyBuilder> builder_;
 
   friend class PropertyBuilder;
 };
 
-} /* namespace core */
-} /* namespace minifi */
-} /* namespace nifi */
-} /* namespace apache */
-} /* namespace org */
+}  // namespace core
+}  // namespace minifi
+}  // namespace nifi
+}  // namespace apache
+}  // namespace org
 
-#endif
+#endif  // LIBMINIFI_INCLUDE_CORE_PROPERTY_H_

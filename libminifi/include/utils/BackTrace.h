@@ -17,15 +17,20 @@
 #ifndef LIBMINIFI_INCLUDE_UTILS_BACKTRACE_H_
 #define LIBMINIFI_INCLUDE_UTILS_BACKTRACE_H_
 
+#include <string>
+
 #ifdef HAS_EXECINFO
 #include <execinfo.h>
-#include <signal.h>
+#include <csignal>
 #endif
 #include <thread>
+#include <utility>
 #include <vector>
 #include <mutex>
+#include <condition_variable>
 #include <iostream>
 #include <sstream>
+#include <memory>
 
 #define TRACE_BUFFER_SIZE 128
 
@@ -36,24 +41,20 @@
 class TraceResolver;
 
 /**
- * Purpose: Backtrace is a movable vector of trace lines.
+ * Purpose: Backtrace is a vector of trace lines.
  *
  */
 class BackTrace {
  public:
-  BackTrace() {
+  BackTrace() = default;
+
+  BackTrace(std::string name) // NOLINT
+      : name_(std::move(name)) {
   }
-  BackTrace(const std::string &name)
-      : name_(name) {
-  }
-  BackTrace(BackTrace &&) = default;
-  BackTrace(BackTrace &) = delete;
 
   std::vector<std::string> getTraces() const {
     return trace_;
   }
-
-  BackTrace &operator=(BackTrace &&other) = default;
 
   /**
    * Return thread name of f this caller
@@ -64,8 +65,8 @@ class BackTrace {
   }
 
  protected:
-  void addLine(const std::string &symbol_line) {
-    trace_.emplace_back(symbol_line);
+  void addLine(std::string symbol_line) {
+    trace_.emplace_back(std::move(symbol_line));
   }
 
  private:
@@ -77,14 +78,8 @@ class BackTrace {
 /**
  * Pulls the trace and places it onto the TraceResolver instance.
  */
-void pull_trace(const uint8_t frames_to_skip = 1);
+void pull_trace(uint8_t frames_to_skip = 1);
 
-#ifdef HAS_EXECINFO
-/**
- * Signal handler that will run via TraceResolver
- */
-void handler(int signr, siginfo_t *info, void *secret);
-#endif
 /**
  * Emplaces a signal handler for SIGUSR2
  */
@@ -96,23 +91,22 @@ void emplace_handler();
  */
 class TraceResolver {
  public:
-
   /**
    * Retrieves the backtrace for the provided thread reference
    * @return BackTrace instance
    */
-  BackTrace &&getBackTrace(const std::string &thread_name, std::thread::native_handle_type thread);
+  BackTrace getBackTrace(std::string thread_name, std::thread::native_handle_type thread);
 
   /**
    * Retrieves the backtrace for the calling thread
    * @returns BackTrace instance
    */
-  BackTrace &&getBackTrace(const std::string &thread_name) {
+  BackTrace getBackTrace(std::string thread_name) {
 #ifdef WIN32
-	  // currrently not supported in windows
-	  return BackTrace(thread_name);
+    // currrently not supported in windows
+    return BackTrace(std::move(thread_name));
 #else
-    return std::move(getBackTrace(thread_name, pthread_self()));
+    return getBackTrace(std::move(thread_name), pthread_self());
 #endif
   }
 
@@ -139,31 +133,41 @@ class TraceResolver {
   }
 
   /**
-   * Returns the thread handle reference in the native format.
+   * Adds a trace line in the format "<file_name> @ <symbol_name> + <symbol_offset>", if symbol_name is not nullptr,
+   * "<file_name>" otherwise.
+   * @param file_name the filename of the shared object
+   * @param symbol_name the name of the symbol (or of the shared object, if the offset is supplied from that)
+   * @param symbol_offset offset from the base address of the symbol (or the shared object)
    */
-  const std::thread::native_handle_type getThreadHandle() {
-    return thread_handle_;
+  void addTraceLine(const char* file_name, const char* symbol_name, uintptr_t symbol_offset) {
+    std::stringstream line;
+    line << file_name;
+    if (symbol_name != nullptr) {
+      line << " @ " << symbol_name << " + " << symbol_offset;
+    }
+    trace_.addLine(line.str());
   }
 
-  /**
-   * Returns the caller handle refernce in the native format.
-   */
-  const std::thread::native_handle_type getCallerHandle() {
-    return caller_handle_;
+  std::unique_lock<std::mutex> lock() {
+    return std::unique_lock<std::mutex>(trace_mutex_);
+  }
+
+  void notifyPullTracesDone(std::unique_lock<std::mutex>& lock) {
+    std::unique_lock<std::mutex> tlock(std::move(lock));
+    pull_traces_ = true;
+    trace_condition_.notify_one();
   }
 
  private:
-  TraceResolver()  // can't use = default due to handle_types not defaulting.
-      : thread_handle_(0),
-        caller_handle_(0) {
-    ;
-  }
+  TraceResolver() = default;
 
   BackTrace trace_;
-  std::thread::native_handle_type thread_handle_;
-  std::thread::native_handle_type caller_handle_;
-  std::mutex mutex_;
+  mutable std::mutex mutex_;
+
+  bool pull_traces_{false};
+  mutable std::mutex trace_mutex_;
+  std::condition_variable trace_condition_;
 };
 
-#endif /* LIBMINIFI_INCLUDE_UTILS_BACKTRACE_H_ */
+#endif  // LIBMINIFI_INCLUDE_UTILS_BACKTRACE_H_
 

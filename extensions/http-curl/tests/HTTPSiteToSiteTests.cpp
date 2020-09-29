@@ -17,48 +17,32 @@
  */
 
 #define CURLOPT_SSL_VERIFYPEER_DISABLE 1
-#include <sys/stat.h>
 #undef NDEBUG
 #include <cassert>
-#include <utility>
 #include <chrono>
-#include <fstream>
-#include <memory>
 #include <string>
-#include <thread>
-#include <type_traits>
 #include <vector>
 #include <iostream>
-#include <sstream>
-#include "HTTPClient.h"
-#include "CivetServer.h"
 #include "sitetosite/HTTPProtocol.h"
 #include "InvokeHTTP.h"
 #include "TestBase.h"
-#include "utils/StringUtils.h"
-#include "core/Core.h"
-#include "core/logging/Logger.h"
-#include "core/ProcessGroup.h"
-#include "core/yaml/YamlConfiguration.h"
 #include "FlowController.h"
-#include "properties/Configure.h"
 #include "io/StreamFactory.h"
 #include "RemoteProcessorGroupPort.h"
 #include "core/ConfigurableComponent.h"
-#include "TestServer.h"
 #include "HTTPIntegrationBase.h"
 #include "HTTPHandlers.h"
 #include "client/HTTPStream.h"
 
 class SiteToSiteTestHarness : public CoapIntegrationBase {
  public:
-  explicit SiteToSiteTestHarness(bool isSecure)
-      : CoapIntegrationBase(2000), isSecure(isSecure) {
+  explicit SiteToSiteTestHarness(bool isSecure, std::chrono::milliseconds waitTime = std::chrono::milliseconds{2000})
+      : CoapIntegrationBase(waitTime.count()), isSecure(isSecure) {
     char format[] = "/tmp/ssth.XXXXXX";
     dir = testController.createTempDirectory(format);
   }
 
-  void testSetup() {
+  void testSetup() override {
     LogTestController::getInstance().setTrace<minifi::RemoteProcessorGroupPort>();
     LogTestController::getInstance().setTrace<minifi::sitetosite::HttpSiteToSiteClient>();
     LogTestController::getInstance().setTrace<minifi::sitetosite::SiteToSiteClient>();
@@ -66,9 +50,10 @@ class SiteToSiteTestHarness : public CoapIntegrationBase {
     LogTestController::getInstance().setTrace<minifi::controllers::SSLContextService>();
     LogTestController::getInstance().setInfo<minifi::FlowController>();
     LogTestController::getInstance().setDebug<core::ConfigurableComponent>();
+    LogTestController::getInstance().setTrace<utils::HttpStreamingCallback>();
 
     std::fstream file;
-    ss << dir << "/" << "tstFile.ext";
+    ss << dir << utils::file::FileUtils::get_separator() << "tstFile.ext";
     file.open(ss.str(), std::ios::out);
     file << "tempFile";
     file.close();
@@ -78,20 +63,13 @@ class SiteToSiteTestHarness : public CoapIntegrationBase {
     configuration->set("nifi.remote.input.socket.port", "8099");
   }
 
-  virtual void waitToVerifyProcessor() {
-    std::this_thread::sleep_for(std::chrono::seconds(3));
-  }
+  void cleanup() override {}
 
-  void cleanup() {
-    unlink(ss.str().c_str());
-  }
-
-  void runAssertions() {
-  }
+  void runAssertions() override {}
 
  protected:
   bool isSecure;
-  char *dir;
+  std::string dir;
   std::stringstream ss;
   TestController testController;
 };
@@ -106,7 +84,8 @@ struct test_profile {
   }
 
   bool allFalse() const {
-    return !flow_url_broken && !transaction_url_broken && !empty_transaction_url && !no_delete && !invalid_checksum;
+    return !flow_url_broken && !transaction_url_broken &&
+      !empty_transaction_url && !no_delete && !invalid_checksum;
   }
   // tests for a broken flow file url
   bool flow_url_broken;
@@ -123,9 +102,13 @@ struct test_profile {
 void run_variance(std::string test_file_location, bool isSecure, std::string url, const struct test_profile &profile) {
   SiteToSiteTestHarness harness(isSecure);
 
+  std::string in_port = "471deef6-2a6e-4a7d-912a-81cc17e3a204";
+  std::string out_port = "471deef6-2a6e-4a7d-912a-81cc17e3a203";
+
   SiteToSiteLocationResponder *responder = new SiteToSiteLocationResponder(isSecure);
 
-  TransactionResponder *transaction_response = new TransactionResponder(url, "471deef6-2a6e-4a7d-912a-81cc17e3a204", true, profile.transaction_url_broken, profile.empty_transaction_url);
+  TransactionResponder *transaction_response = new TransactionResponder(url, in_port,
+      true, profile.transaction_url_broken, profile.empty_transaction_url);
 
   std::string transaction_id = transaction_response->getTransactionId();
 
@@ -140,11 +123,11 @@ void run_variance(std::string test_file_location, bool isSecure, std::string url
 
   harness.setUrl(controller_loc, responder);
 
-  std::string transaction_url = url + "/data-transfer/input-ports/471deef6-2a6e-4a7d-912a-81cc17e3a204/transactions";
-  std::string action_url = url + "/site-to-site/input-ports/471deef6-2a6e-4a7d-912a-81cc17e3a204/transactions";
+  std::string transaction_url = url + "/data-transfer/input-ports/" + in_port + "/transactions";
+  std::string action_url = url + "/site-to-site/input-ports/" + in_port + "/transactions";
 
-  std::string transaction_output_url = url + "/data-transfer/output-ports/471deef6-2a6e-4a7d-912a-81cc17e3a203/transactions";
-  std::string action_output_url = url + "/site-to-site/output-ports/471deef6-2a6e-4a7d-912a-81cc17e3a203/transactions";
+  std::string transaction_output_url = url + "/data-transfer/output-ports/" + out_port + "/transactions";
+  std::string action_output_url = url + "/site-to-site/output-ports/" + out_port + "/transactions";
 
   harness.setUrl(transaction_url, transaction_response);
 
@@ -160,7 +143,8 @@ void run_variance(std::string test_file_location, bool isSecure, std::string url
   flowResponder->setFlowUrl(flow_url);
   auto producedFlows = flowResponder->getFlows();
 
-  TransactionResponder *transaction_response_output = new TransactionResponder(url, "471deef6-2a6e-4a7d-912a-81cc17e3a203", false, profile.transaction_url_broken, profile.empty_transaction_url);
+  TransactionResponder *transaction_response_output = new TransactionResponder(url, out_port,
+      false, profile.transaction_url_broken, profile.empty_transaction_url);
   std::string transaction_output_id = transaction_response_output->getTransactionId();
   transaction_response_output->setFeed(producedFlows);
 
@@ -190,25 +174,25 @@ void run_variance(std::string test_file_location, bool isSecure, std::string url
   std::stringstream assertStr;
   if (profile.allFalse()) {
     assertStr << "Site2Site transaction " << transaction_id << " peer finished transaction";
-    assert(LogTestController::getInstance().contains(assertStr.str()) == true);
+    assert(LogTestController::getInstance().contains(assertStr.str()));
   } else if (profile.empty_transaction_url) {
-    assert(LogTestController::getInstance().contains("Location is empty") == true);
+    assert(LogTestController::getInstance().contains("Location is empty"));
   } else if (profile.transaction_url_broken) {
-    assert(LogTestController::getInstance().contains("Could not create transaction, intent is ohstuff") == true);
+    assert(LogTestController::getInstance().contains("Could not create transaction, intent is ohstuff"));
   } else if (profile.invalid_checksum) {
     assertStr << "Site2Site transaction " << transaction_id << " peer confirm transaction with CRC Imawrongchecksumshortandstout";
-    assert(LogTestController::getInstance().contains(assertStr.str()) == true);
+    assert(LogTestController::getInstance().contains(assertStr.str()));
     assertStr.str(std::string());
     assertStr << "Site2Site transaction " << transaction_id << " CRC not matched";
-    assert(LogTestController::getInstance().contains(assertStr.str()) == true);
+    assert(LogTestController::getInstance().contains(assertStr.str()));
     assertStr.str(std::string());
     assertStr << "Site2Site delete transaction " << transaction_id;
-    assert(LogTestController::getInstance().contains(assertStr.str()) == true);
+    assert(LogTestController::getInstance().contains(assertStr.str()));
   } else if (profile.no_delete) {
-    assert(LogTestController::getInstance().contains("Received 401 response code from delete") == true);
+    assert(LogTestController::getInstance().contains("Received 401 response code from delete"));
   } else {
     assertStr << "Site2Site transaction " << transaction_id << " peer unknown respond code 254";
-    assert(LogTestController::getInstance().contains(assertStr.str()) == true);
+    assert(LogTestController::getInstance().contains(assertStr.str()));
   }
   LogTestController::getInstance().reset();
 }
@@ -216,51 +200,49 @@ void run_variance(std::string test_file_location, bool isSecure, std::string url
 int main(int argc, char **argv) {
   transaction_id = 0;
   transaction_id_output = 0;
-  std::string key_dir, test_file_location, url;
-  if (argc > 1) {
-    test_file_location = argv[1];
-    key_dir = argv[2];
-    url = argv[3];
-  }
+  const cmd_args args = parse_cmdline_args_with_url(argc, argv);
+  const bool isSecure = args.isUrlSecure();
 
-  bool isSecure = false;
-  if (url.find("https") != std::string::npos) {
-    isSecure = true;
+#ifdef WIN32
+  if (url.find("localhost") != std::string::npos) {
+	  std::string port, scheme, path;
+	  parse_http_components(url, port, scheme, path);
+	  url = scheme + "://" + org::apache::nifi::minifi::io::Socket::getMyHostName() + ":" + port +  path;
   }
-
+#endif
   {
     struct test_profile profile;
-    run_variance(test_file_location, isSecure, url, profile);
+    run_variance(args.test_file, isSecure, args.url, profile);
   }
 
   {
     struct test_profile profile;
     profile.flow_url_broken = true;
-    run_variance(test_file_location, isSecure, url, profile);
+    run_variance(args.test_file, isSecure, args.url, profile);
   }
 
   {
     struct test_profile profile;
     profile.empty_transaction_url = true;
-    run_variance(test_file_location, isSecure, url, profile);
+    run_variance(args.test_file, isSecure, args.url, profile);
   }
 
   {
     struct test_profile profile;
     profile.transaction_url_broken = true;
-    run_variance(test_file_location, isSecure, url, profile);
+    run_variance(args.test_file, isSecure, args.url, profile);
   }
 
   {
     struct test_profile profile;
     profile.no_delete = true;
-    run_variance(test_file_location, isSecure, url, profile);
+    run_variance(args.test_file, isSecure, args.url, profile);
   }
 
   {
     struct test_profile profile;
     profile.invalid_checksum = true;
-    run_variance(test_file_location, isSecure, url, profile);
+    run_variance(args.test_file, isSecure, args.url, profile);
   }
 
   return 0;

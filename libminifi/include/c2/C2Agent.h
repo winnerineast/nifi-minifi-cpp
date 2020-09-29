@@ -18,6 +18,9 @@
 #ifndef LIBMINIFI_INCLUDE_C2_C2AGENT_H_
 #define LIBMINIFI_INCLUDE_C2_C2AGENT_H_
 
+#include <map>
+#include <string>
+#include <vector>
 #include <utility>
 #include <functional>
 #include <future>
@@ -34,10 +37,15 @@
 #include "C2Protocol.h"
 #include "io/validation.h"
 #include "HeartBeatReporter.h"
+#include "utils/Id.h"
+#include "utils/MinifiConcurrentQueue.h"
+#include "utils/ThreadPool.h"
+
 namespace org {
 namespace apache {
 namespace nifi {
 namespace minifi {
+
 namespace c2 {
 
 #define C2_AGENT_UPDATE_NAME "C2UpdatePolicy"
@@ -52,13 +60,18 @@ namespace c2 {
  *   0 HeartBeat --  RESERVED
  *   1-255 Defined by the configuration file.
  */
-class C2Agent : public state::UpdateController, public state::response::ResponseNodeSink, public std::enable_shared_from_this<C2Agent> {
+class C2Agent : public state::UpdateController {
  public:
-
-  C2Agent(const std::shared_ptr<core::controller::ControllerServiceProvider> &controller, const std::shared_ptr<state::StateMonitor> &updateSink, const std::shared_ptr<Configure> &configure);
-
-  virtual ~C2Agent() {
+  C2Agent(const std::shared_ptr<core::controller::ControllerServiceProvider> &controller,
+          const std::shared_ptr<state::StateMonitor> &updateSink,
+          const std::shared_ptr<Configure> &configure);
+  virtual ~C2Agent() noexcept {
+    delete protocol_.load();
   }
+
+  void start() override;
+
+  void stop() override;
 
   /**
    * Sends the heartbeat to ths server. Will include metrics
@@ -66,31 +79,12 @@ class C2Agent : public state::UpdateController, public state::response::Response
    */
   void performHeartBeat();
 
-  virtual std::vector<std::function<state::Update()>> getFunctions() {
-    return functions_;
-  }
-
-  /**
-   * Sets the metric within this sink
-   * @param metric metric to set
-   * @param return 0 on success, -1 on failure.
-   */
-  virtual int16_t setResponseNodes(const std::shared_ptr<state::response::ResponseNode> &metric);
-
-  /**
-    * Sets the metric within this sink
-    * @param metric metric to set
-    * @param return 0 on success, -1 on failure.
-    */
-   virtual int16_t setMetricsNodes(const std::shared_ptr<state::response::ResponseNode> &metric);
-
-  int64_t getHeartBeatDelay(){
+  int64_t getHeartBeatDelay() {
     std::lock_guard<std::mutex> lock(heartbeat_mutex);
     return heart_beat_period_;
   }
 
  protected:
-
   /**
    * Restarts this agent.
    */
@@ -136,16 +130,14 @@ class C2Agent : public state::UpdateController, public state::response::Response
    * Enqueues a C2 server response for us to evaluate and parse.
    */
   void enqueue_c2_server_response(C2Payload &&resp) {
-    std::lock_guard<std::timed_mutex> lock(queue_mutex);
-    responses.push_back(std::move(resp));
+    responses.enqueue(std::move(resp));
   }
 
   /**
    * Enqueues a c2 payload for a response to the C2 server.
    */
   void enqueue_c2_response(C2Payload &&resp) {
-    std::lock_guard<std::timed_mutex> lock(request_mutex);
-    requests.push_back(std::move(resp));
+    requests.enqueue(std::move(resp));
   }
 
   /**
@@ -170,29 +162,29 @@ class C2Agent : public state::UpdateController, public state::response::Response
    */
   bool update_property(const std::string &property_name, const std::string &property_value,  bool persist = false);
 
+  /**
+   * Creates configuration options C2 payload for response
+   */
+  C2Payload prepareConfigurationOptions(const C2ContentResponse &resp) const;
+
   std::timed_mutex metrics_mutex_;
   std::map<std::string, std::shared_ptr<state::response::ResponseNode>> metrics_map_;
 
   /**
-     * Device information stored in the metrics format
-     */
-    std::map<std::string, std::shared_ptr<state::response::ResponseNode>> root_response_nodes_;
+   * Device information stored in the metrics format
+   */
+  std::map<std::string, std::shared_ptr<state::response::ResponseNode>> root_response_nodes_;
 
   /**
    * Device information stored in the metrics format
    */
   std::map<std::string, std::shared_ptr<state::response::ResponseNode>> device_information_;
-  // queue mutex
-  std::timed_mutex queue_mutex;
-
-  // queue mutex
-  std::timed_mutex request_mutex;
 
   // responses for the the C2 agent.
-  std::vector<C2Payload> responses;
+  utils::ConcurrentQueue<C2Payload> responses;
 
   // requests that originate from the C2 server.
-  std::vector<C2Payload> requests;
+  utils::ConcurrentQueue<C2Payload> requests;
 
   // heart beat period.
   int64_t heart_beat_period_;
@@ -204,16 +196,16 @@ class C2Agent : public state::UpdateController, public state::response::Response
   std::chrono::steady_clock::time_point last_run_;
 
   // function that performs the heartbeat
-  std::function<state::Update()> c2_producer_;
+  std::function<utils::TaskRescheduleInfo()> c2_producer_;
 
   // function that acts upon the
-  std::function<state::Update()> c2_consumer_;
+  std::function<utils::TaskRescheduleInfo()> c2_consumer_;
 
   // reference to the update sink, against which we will execute updates.
   std::shared_ptr<state::StateMonitor> update_sink_;
 
   // functions that will be used for the udpate controller.
-  std::vector<std::function<state::Update()>> functions_;
+  std::vector<std::function<utils::TaskRescheduleInfo()>> functions_;
 
   std::shared_ptr<controllers::UpdatePolicyControllerService> update_service_;
 
@@ -243,12 +235,20 @@ class C2Agent : public state::UpdateController, public state::response::Response
   std::string bin_location_;
 
   std::shared_ptr<logging::Logger> logger_;
+
+  utils::ThreadPool<utils::TaskRescheduleInfo> thread_pool_;
+
+  std::vector<std::string> task_ids_;
+
+  bool manifest_sent_;
+
+  const uint64_t C2RESPONSE_POLL_MS = 100;
 };
 
-} /* namesapce c2 */
-} /* namespace minifi */
-} /* namespace nifi */
-} /* namespace apache */
-} /* namespace org */
+}  // namespace c2
+}  // namespace minifi
+}  // namespace nifi
+}  // namespace apache
+}  // namespace org
 
-#endif /* LIBMINIFI_INCLUDE_C2_C2AGENT_H_ */
+#endif  // LIBMINIFI_INCLUDE_C2_C2AGENT_H_

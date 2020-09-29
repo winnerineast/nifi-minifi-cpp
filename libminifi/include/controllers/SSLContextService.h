@@ -17,15 +17,20 @@
  */
 #ifndef LIBMINIFI_INCLUDE_CONTROLLERS_SSLCONTEXTSERVICE_H_
 #define LIBMINIFI_INCLUDE_CONTROLLERS_SSLCONTEXTSERVICE_H_
+
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN 1
-#endif 
+#endif
 #ifdef OPENSSL_SUPPORT
 #include <openssl/err.h>
 #include <openssl/ssl.h>
+#include <openssl/bio.h>
+#include <openssl/pkcs12.h>
+#include "io/tls/TLSUtils.h"
 #endif
 #include <iostream>
 #include <memory>
+#include <string>
 #include "core/Resource.h"
 #include "utils/StringUtils.h"
 #include "io/validation.h"
@@ -41,14 +46,11 @@ namespace controllers {
 class SSLContext {
  public:
 #ifdef OPENSSL_SUPPORT
-  SSLContext(SSL_CTX *context)
+  SSLContext(SSL_CTX *context) // NOLINT
       : context_(context) {
-
   }
 #else
-	 SSLContext(void *context) {
-
-	 }
+  SSLContext(void *context) {} // NOLINT
 #endif
   ~SSLContext() {
 #ifdef OPENSSL_SUPPORT
@@ -133,7 +135,6 @@ class SSLContextService : public core::controller::ControllerService {
   const std::string &getCACertificate();
 
   void yield() {
-
   }
 
   bool isRunning() {
@@ -145,60 +146,12 @@ class SSLContextService : public core::controller::ControllerService {
   }
 
 #ifdef OPENSSL_SUPPORT
-  bool configure_ssl_context(SSL_CTX *ctx) {
-    if (!IsNullOrEmpty(certificate)) {
-      if (SSL_CTX_use_certificate_file(ctx, certificate.c_str(), SSL_FILETYPE_PEM) <= 0) {
-        logger_->log_error("Could not create load certificate, error : %s", std::strerror(errno));
-        return false;
-      }
-      if (!IsNullOrEmpty(passphrase_)) {
-        SSL_CTX_set_default_passwd_cb_userdata(ctx, &passphrase_);
-        SSL_CTX_set_default_passwd_cb(ctx, pemPassWordCb);
-      }
-    }
-
-    if (!IsNullOrEmpty(private_key_)) {
-      int retp = SSL_CTX_use_PrivateKey_file(ctx, private_key_.c_str(), SSL_FILETYPE_PEM);
-      if (retp != 1) {
-        logger_->log_error("Could not create load private key,%i on %s error : %s", retp, private_key_, std::strerror(errno));
-        return false;
-      }
-
-      if (!SSL_CTX_check_private_key(ctx)) {
-        logger_->log_error("Private key does not match the public certificate, error : %s", std::strerror(errno));
-        return false;
-      }
-    }
-
-    SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER, nullptr);
-    int retp = SSL_CTX_load_verify_locations(ctx, ca_certificate_.c_str(), 0);
-
-    if (retp == 0) {
-      logger_->log_error("Can not load CA certificate, Exiting, error : %s", std::strerror(errno));
-      return false;
-    }
-
-    return true;
-  }
+  bool configure_ssl_context(SSL_CTX *ctx);
 #endif
 
   virtual void onEnable();
 
  protected:
-
-  static int pemPassWordCb(char *buf, int size, int rwflag, void *userdata) {
-
-    std::string *pass = (std::string*) userdata;
-    if (pass->length() > 0) {
-
-      memset(buf, 0x00, size);
-      memcpy(buf, pass->c_str(), pass->length() - 1);
-
-      return pass->length() - 1;
-    }
-    return 0;
-  }
-
   virtual void initializeTLS();
 
   std::mutex initialization_mutex_;
@@ -210,15 +163,31 @@ class SSLContextService : public core::controller::ControllerService {
   std::string passphrase_file_;
   std::string ca_certificate_;
 
+#ifdef OPENSSL_SUPPORT
+  static std::string getLatestOpenSSLErrorString() {
+    unsigned long err = ERR_peek_last_error(); // NOLINT
+    if (err == 0U) {
+      return "";
+    }
+    char buf[4096];
+    ERR_error_string_n(err, buf, sizeof(buf));
+    return buf;
+  }
+#endif
+
+  static bool isFileTypeP12(const std::string& filename) {
+    return utils::StringUtils::endsWithIgnoreCase(filename, "p12");
+  }
+
  private:
   std::shared_ptr<logging::Logger> logger_;
 };
 typedef int (SSLContextService::*ptr)(char *, int, int, void *);
 REGISTER_RESOURCE(SSLContextService, "Controller service that provides SSL/TLS capabilities to consuming interfaces");
 
-} /* namespace controllers */
-} /* namespace minifi */
-} /* namespace nifi */
-} /* namespace apache */
-} /* namespace org */
-#endif /* LIBMINIFI_INCLUDE_CONTROLLERS_SSLCONTEXTSERVICE_H_ */
+}  // namespace controllers
+}  // namespace minifi
+}  // namespace nifi
+}  // namespace apache
+}  // namespace org
+#endif  // LIBMINIFI_INCLUDE_CONTROLLERS_SSLCONTEXTSERVICE_H_

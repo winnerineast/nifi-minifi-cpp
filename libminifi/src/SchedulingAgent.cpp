@@ -22,9 +22,9 @@
 #include <thread>
 #include <utility>
 #include <memory>
-#include <iostream>
-#include "Exception.h"
 #include "core/Processor.h"
+#include "utils/GeneralUtils.h"
+#include "utils/gsl.h"
 
 namespace org {
 namespace apache {
@@ -39,41 +39,41 @@ bool SchedulingAgent::hasWorkToDo(std::shared_ptr<core::Processor> processor) {
     return false;
 }
 
-std::future<uint64_t> SchedulingAgent::enableControllerService(std::shared_ptr<core::controller::ControllerServiceNode> &serviceNode) {
+std::future<utils::TaskRescheduleInfo> SchedulingAgent::enableControllerService(std::shared_ptr<core::controller::ControllerServiceNode> &serviceNode) {
   logger_->log_info("Enabling CSN in SchedulingAgent %s", serviceNode->getName());
   // reference the enable function from serviceNode
-  std::function<uint64_t()> f_ex = [serviceNode] {
+  std::function<utils::TaskRescheduleInfo()> f_ex = [serviceNode] {
       serviceNode->enable();
-      return 0;
+      return utils::TaskRescheduleInfo::Done();
     };
 
   // only need to run this once.
-  std::unique_ptr<SingleRunMonitor> monitor = std::unique_ptr<SingleRunMonitor>(new SingleRunMonitor(&running_));
-  utils::Worker<uint64_t> functor(f_ex, serviceNode->getUUIDStr(), std::move(monitor));
+  auto monitor = utils::make_unique<utils::ComplexMonitor>();
+  utils::Worker<utils::TaskRescheduleInfo> functor(f_ex, serviceNode->getUUIDStr(), std::move(monitor));
   // move the functor into the thread pool. While a future is returned
   // we aren't terribly concerned with the result.
-  std::future<uint64_t> future;
+  std::future<utils::TaskRescheduleInfo> future;
   thread_pool_.execute(std::move(functor), future);
   if (future.valid())
     future.wait();
   return future;
 }
 
-std::future<uint64_t> SchedulingAgent::disableControllerService(std::shared_ptr<core::controller::ControllerServiceNode> &serviceNode) {
+std::future<utils::TaskRescheduleInfo> SchedulingAgent::disableControllerService(std::shared_ptr<core::controller::ControllerServiceNode> &serviceNode) {
   logger_->log_info("Disabling CSN in SchedulingAgent %s", serviceNode->getName());
   // reference the disable function from serviceNode
-  std::function<uint64_t()> f_ex = [serviceNode] {
+  std::function<utils::TaskRescheduleInfo()> f_ex = [serviceNode] {
     serviceNode->disable();
-    return 0;
+    return utils::TaskRescheduleInfo::Done();
   };
 
   // only need to run this once.
-  std::unique_ptr<SingleRunMonitor> monitor = std::unique_ptr<SingleRunMonitor>(new SingleRunMonitor(&running_));
-  utils::Worker<uint64_t> functor(f_ex, serviceNode->getUUIDStr(), std::move(monitor));
+  auto monitor = utils::make_unique<utils::ComplexMonitor>();
+  utils::Worker<utils::TaskRescheduleInfo> functor(f_ex, serviceNode->getUUIDStr(), std::move(monitor));
 
   // move the functor into the thread pool. While a future is returned
   // we aren't terribly concerned with the result.
-  std::future<uint64_t> future;
+  std::future<utils::TaskRescheduleInfo> future;
   thread_pool_.execute(std::move(functor), future);
   if (future.valid())
     future.wait();
@@ -98,19 +98,27 @@ bool SchedulingAgent::onTrigger(const std::shared_ptr<core::Processor> &processo
     // No work to do, yield
     return true;
   }
-  if (hasTooMuchOutGoing(processor)) {
+  if (processor->isThrottledByBackpressure()) {
     logger_->log_debug("backpressure applied because too much outgoing for %s", processor->getUUIDStr());
     // need to apply backpressure
     return true;
   }
 
+  auto schedule_it = scheduled_processors_.end();
+
+  {
+    std::lock_guard<std::mutex> lock(watchdog_mtx_);
+    schedule_it = scheduled_processors_.emplace(processor).first;
+  }
+
+  const auto guard = gsl::finally([this, &schedule_it](){
+    std::lock_guard<std::mutex> lock(watchdog_mtx_);
+    scheduled_processors_.erase(schedule_it);
+  });
+
   processor->incrementActiveTasks();
   try {
     processor->onTrigger(processContext, sessionFactory);
-    processor->decrementActiveTask();
-  } catch (Exception &exception) {
-    // Normal exception
-    logger_->log_debug("Caught Exception %s", exception.what());
     processor->decrementActiveTask();
   } catch (std::exception &exception) {
     logger_->log_debug("Caught Exception %s", exception.what());
@@ -125,7 +133,20 @@ bool SchedulingAgent::onTrigger(const std::shared_ptr<core::Processor> &processo
   return false;
 }
 
-} /* namespace minifi */
-} /* namespace nifi */
-} /* namespace apache */
-} /* namespace org */
+void SchedulingAgent::watchDogFunc() {
+  std::lock_guard<std::mutex> lock(watchdog_mtx_);
+  auto now = std::chrono::steady_clock::now();
+  for (const auto& info : scheduled_processors_) {
+    auto elapsed = now - info.last_alert_time_;
+    if (elapsed > alert_time_) {
+      int64_t elapsed_ms{ std::chrono::duration_cast<std::chrono::milliseconds>(now - info.start_time_).count() };
+      logger_->log_warn("%s::onTrigger has been running for %lld  ms in %s", info.name_, elapsed_ms, info.uuid_);
+      info.last_alert_time_ = now;
+    }
+  }
+}
+
+}  // namespace minifi
+}  // namespace nifi
+}  // namespace apache
+}  // namespace org

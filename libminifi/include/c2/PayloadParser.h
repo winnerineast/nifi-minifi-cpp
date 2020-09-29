@@ -18,9 +18,12 @@
 #ifndef LIBMINIFI_INCLUDE_C2_PAYLOADPARSER_H_
 #define LIBMINIFI_INCLUDE_C2_PAYLOADPARSER_H_
 
+#include <memory>
+#include <string>
+#include <vector>
+
 #include "C2Payload.h"
 #include "core/state/Value.h"
-#include <string>
 
 namespace org {
 namespace apache {
@@ -30,10 +33,9 @@ namespace c2 {
 
 class PayloadParseException : public std::runtime_error {
  public:
-  PayloadParseException(const std::string &msg)
+  PayloadParseException(const std::string &msg) // NOLINT
       : std::runtime_error(msg) {
   }
-
 };
 
 template<typename T, typename C>
@@ -88,6 +90,13 @@ struct convert_if<int64_t> : public convert_if_base<int64_t, state::response::In
 };
 
 template<>
+struct convert_if<uint32_t > : public convert_if_base<uint32_t, state::response::UInt32Value> {
+  explicit convert_if(const std::shared_ptr<state::response::Value> &node)
+      : convert_if_base(node) {
+  }
+};
+
+template<>
 struct convert_if<int> : public convert_if_base<int, state::response::IntValue> {
   explicit convert_if(const std::shared_ptr<state::response::Value> &node)
       : convert_if_base(node) {
@@ -107,9 +116,7 @@ struct convert_if<bool> : public convert_if_base<bool, state::response::BoolValu
  * Note that this isn't functionally complete.
  */
 class PayloadParser {
-
  public:
-
   static PayloadParser getInstance(const C2Payload &payload) {
     return PayloadParser(payload);
   }
@@ -167,8 +174,7 @@ class PayloadParser {
   PayloadParser(PayloadParser &&parser) = default;
 
  private:
-
-  PayloadParser(const C2Payload &payload)
+  PayloadParser(const C2Payload &payload) // NOLINT
       : ref_(payload) {
   }
 
@@ -179,10 +185,10 @@ class PayloadParser {
   std::string component_to_get_;
 };
 
-} /* namesapce c2 */
-} /* namespace minifi */
-} /* namespace nifi */
-} /* namespace apache */
-} /* namespace org */
+}  // namespace c2
+}  // namespace minifi
+}  // namespace nifi
+}  // namespace apache
+}  // namespace org
 
-#endif /* LIBMINIFI_INCLUDE_C2_PAYLOADPARSER_H_ */
+#endif  // LIBMINIFI_INCLUDE_C2_PAYLOADPARSER_H_

@@ -19,6 +19,8 @@
 #ifndef LIBMINIFI_INCLUDE_CORE_WEAKREFERENCE_H_
 #define LIBMINIFI_INCLUDE_CORE_WEAKREFERENCE_H_
 
+#include <memory>
+
 #include  <type_traits>
 #include <vector>
 
@@ -34,20 +36,16 @@ namespace core {
  */
 class WeakReference {
  public:
-
   WeakReference(const WeakReference &other) = delete;
   WeakReference(WeakReference &&other) = default;
   WeakReference &operator=(const WeakReference &other) = delete;
   WeakReference &operator=(WeakReference &&other) = default;
 
-  virtual ~WeakReference() {
-  }
+  virtual ~WeakReference() = default;
 
   virtual void remove() = 0;
  protected:
-  WeakReference() {
-
-  }
+  WeakReference() = default;
 };
 
 /**
@@ -60,13 +58,9 @@ class WeakReference {
  */
 class ReferenceContainer {
  public:
-  ReferenceContainer() {
+  ReferenceContainer() = default;
 
-  }
-
-  ~ReferenceContainer() {
-
-  }
+  ~ReferenceContainer() = default;
 
   void addReference(std::shared_ptr<WeakReference> ref) {
     std::lock_guard<std::mutex> lock(mutex);
@@ -87,17 +81,15 @@ class ReferenceContainer {
   }
 
  protected:
-
   std::mutex mutex;
 
   std::vector<std::shared_ptr<WeakReference> > references;
-
 };
 
-}/* namespace core */
-} /* namespace minifi */
-} /* namespace nifi */
-} /* namespace apache */
-} /* namespace org */
+}  // namespace core
+}  // namespace minifi
+}  // namespace nifi
+}  // namespace apache
+}  // namespace org
 
-#endif /* LIBMINIFI_INCLUDE_CORE_WEAKREFERENCE_H_ */
+#endif  // LIBMINIFI_INCLUDE_CORE_WEAKREFERENCE_H_

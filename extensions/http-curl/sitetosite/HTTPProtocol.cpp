@@ -55,7 +55,7 @@ std::shared_ptr<Transaction> HttpSiteToSiteClient::createTransaction(std::string
   uri << getBaseURI() << "data-transfer/" << dir_str << "/" << getPortId() << "/transactions";
   auto client = create_http_client(uri.str(), "POST");
   client->appendHeader(PROTOCOL_VERSION_HEADER, "1");
-  client->setConnectionTimeout(5);
+  client->setConnectionTimeout(std::chrono::milliseconds(5000));
   client->setContentType("application/json");
   client->appendHeader("Accept: application/json");
   client->setUseChunkedEncoding();
@@ -69,10 +69,9 @@ std::shared_ptr<Transaction> HttpSiteToSiteClient::createTransaction(std::string
     if (utils::StringUtils::equalsIgnoreCase(intent_name, "transaction-url")) {
       auto url = client->getHeaderValue("Location");
 
-      if (IsNullOrEmpty(&url)) {
+      if (IsNullOrEmpty(url)) {
         logger_->log_debug("Location is empty");
       } else {
-
         org::apache::nifi::minifi::io::CRCStream<SiteToSitePeer> crcstream(peer_.get());
         auto transaction = std::make_shared<HttpTransaction>(direction, crcstream);
         transaction->initialize(this, url);
@@ -133,10 +132,10 @@ int HttpSiteToSiteClient::readResponse(const std::shared_ptr<Transaction> &trans
           logger_->log_debug("confirm read for %s, but not finished ", transaction->getUUIDStr());
           if (stream->waitForDataAvailable()) {
             code = CONTINUE_TRANSACTION;
+            return 1;
           }
         }
 
-        closeTransaction(transaction->getUUIDStr());
         code = CONFIRM_TRANSACTION;
       } else {
         auto stream = dynamic_cast<io::HttpStream*>(peer_->getStream());
@@ -158,9 +157,8 @@ int HttpSiteToSiteClient::readResponse(const std::shared_ptr<Transaction> &trans
     } else if (transaction->getState() == TRANSACTION_CONFIRMED) {
       closeTransaction(transaction->getUUIDStr());
       code = CONFIRM_TRANSACTION;
-    } else {
-
     }
+
     return 1;
   } else if (transaction->getState() == TRANSACTION_CONFIRMED) {
     closeTransaction(transaction->getUUIDStr());
@@ -243,27 +241,32 @@ void HttpSiteToSiteClient::closeTransaction(const std::string &transactionID) {
 
   if (it == known_transactions_.end()) {
     return;
-  } else {
-    transaction = it->second;
-    if (transaction->closed_) {
-      return;
-    }
+  }
+
+  transaction = it->second;
+  if (transaction->closed_) {
+    return;
   }
 
   std::string append_str;
-  logger_->log_info("Site to Site closed transaction %s", transaction->getUUIDStr());
+  logger_->log_trace("Site to Site closing transaction %s", transaction->getUUIDStr());
+
+
+  bool data_received = transaction->getDirection() == RECEIVE && (current_code == CONFIRM_TRANSACTION || current_code == TRANSACTION_FINISHED);
 
   int code = UNRECOGNIZED_RESPONSE_CODE;
-  if (transaction->getState() == TRANSACTION_CONFIRMED) {
+  // In case transaction was used to actually transmit data (conditions are a bit different for send and receive to detect this),
+  // it has to be confirmed before closing.
+  // In case no data was transmitted, there is nothing to confirm, so the transaction can be cancelled without confirming it.
+  // Confirm means matching CRC checksum of data at both sides.
+  if (transaction->getState() == TRANSACTION_CONFIRMED || data_received) {
     code = CONFIRM_TRANSACTION;
-  } else if (transaction->getDirection() == RECEIVE && current_code == CONFIRM_TRANSACTION) {
-    if (transaction->_bytes > 0)
-      code = CONFIRM_TRANSACTION;
-    else
-      code = CANCEL_TRANSACTION;
-
   } else if (transaction->current_transfers_ == 0 && !transaction->isDataAvailable()) {
     code = CANCEL_TRANSACTION;
+  } else {
+    std::string directon = transaction->getDirection() == RECEIVE ? "Receive" : "Send";
+    logger_->log_error("Transaction %s to be closed is in unexpected state. Direction: %s, tranfers: %d, bytes: %llu, state: %d",
+        transactionID, directon, transaction->total_transfers_, transaction->_bytes, transaction->getState());
   }
 
   std::stringstream uri;
@@ -271,14 +274,15 @@ void HttpSiteToSiteClient::closeTransaction(const std::string &transactionID) {
 
   uri << getBaseURI() << "data-transfer/" << dir_str << "/" << getPortId() << "/transactions/" << transactionID << "?responseCode=" << code;
 
-  if (transaction->getDirection() == RECEIVE && current_code == CONFIRM_TRANSACTION && transaction->_bytes > 0) {
+  if (code == CONFIRM_TRANSACTION && data_received) {
     uri << "&checksum=" << transaction->getCRC();
   }
+
   auto client = create_http_client(uri.str(), "DELETE");
 
   client->appendHeader(PROTOCOL_VERSION_HEADER, "1");
 
-  client->setConnectionTimeout(5);
+  client->setConnectionTimeout(std::chrono::milliseconds(5000));
 
   client->appendHeader("Accept", "application/json");
 
@@ -287,6 +291,9 @@ void HttpSiteToSiteClient::closeTransaction(const std::string &transactionID) {
   logger_->log_debug("Received %d response code from delete", client->getResponseCode());
 
   if (client->getResponseCode() == 400) {
+    std::string error(client->getResponseBody().data(), client->getResponseBody().size());
+
+    logging::LOG_WARN(logger_) << "400 received: " << error;
     std::stringstream message;
     message << "Received " << client->getResponseCode() << " from " << uri.str();
     throw Exception(SITE2SITE_EXCEPTION, message.str());
@@ -298,23 +305,9 @@ void HttpSiteToSiteClient::closeTransaction(const std::string &transactionID) {
 }
 
 void HttpSiteToSiteClient::deleteTransaction(std::string transactionID) {
-  std::shared_ptr<Transaction> transaction = NULL;
-
-  std::map<std::string, std::shared_ptr<Transaction> >::iterator it = this->known_transactions_.find(transactionID);
-
-  if (it == known_transactions_.end()) {
-    return;
-  } else {
-    transaction = it->second;
-  }
-
-  std::string append_str;
-  logger_->log_debug("Site2Site delete transaction %s", transaction->getUUIDStr());
-
   closeTransaction(transactionID);
 
-  known_transactions_.erase(transactionID);
-
+  SiteToSiteClient::deleteTransaction(transactionID);
 }
 
 } /* namespace sitetosite */

@@ -15,18 +15,23 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#ifndef LIBMINIFI_INCLUDE_CORE_REPOSITORY_VolatileRepository_H_
-#define LIBMINIFI_INCLUDE_CORE_REPOSITORY_VolatileRepository_H_
+#ifndef LIBMINIFI_INCLUDE_CORE_REPOSITORY_VOLATILEREPOSITORY_H_
+#define LIBMINIFI_INCLUDE_CORE_REPOSITORY_VOLATILEREPOSITORY_H_
 
-#include "core/Repository.h"
 #include <chrono>
-#include <vector>
+#include <limits>
 #include <map>
-#include "core/SerializableComponent.h"
-#include "core/Core.h"
-#include "Connection.h"
-#include "utils/StringUtils.h"
+#include <memory>
+#include <string>
+#include <utility>
+#include <vector>
+
 #include "AtomicRepoEntries.h"
+#include "Connection.h"
+#include "core/Core.h"
+#include "core/Repository.h"
+#include "core/SerializableComponent.h"
+#include "utils/StringUtils.h"
 
 namespace org {
 namespace apache {
@@ -48,7 +53,6 @@ namespace repository {
 template<typename T>
 class VolatileRepository : public core::Repository, public std::enable_shared_from_this<VolatileRepository<T>> {
  public:
-
   static const char *volatile_repo_max_count;
   static const char *volatile_repo_max_bytes;
   // Constructor
@@ -62,9 +66,7 @@ class VolatileRepository : public core::Repository, public std::enable_shared_fr
         current_index_(0),
         max_count_(10000),
         max_size_(maxPartitionBytes * 0.75),
-        logger_(logging::LoggerFactory<VolatileRepository>::getLogger())
-
-  {
+        logger_(logging::LoggerFactory<VolatileRepository>::getLogger()) {
     purge_required_ = false;
   }
 
@@ -79,12 +81,22 @@ class VolatileRepository : public core::Repository, public std::enable_shared_fr
 
   virtual void run() = 0;
 
+  virtual bool isNoop() {
+    return false;
+  }
+
   /**
    * Places a new object into the volatile memory area
    * @param key key to add to the repository
    * @param buf buffer 
    **/
   virtual bool Put(T key, const uint8_t *buf, size_t bufLen);
+
+  /**
+   * Places new objects into the volatile memory area
+   * @param data the key-value pairs to add to the repository
+   **/
+  virtual bool MultiPut(const std::vector<std::pair<T, std::unique_ptr<io::DataStream>>>& data);
 
   /**
    * Deletes the key
@@ -131,7 +143,6 @@ class VolatileRepository : public core::Repository, public std::enable_shared_fr
   }
 
  protected:
-
   virtual void emplace(RepoValue<T> &old_value) {
     std::lock_guard<std::mutex> lock(purge_mutex_);
     purge_list_.push_back(old_value.getKey());
@@ -171,7 +182,6 @@ class VolatileRepository : public core::Repository, public std::enable_shared_fr
 
  private:
   std::shared_ptr<logging::Logger> logger_;
-
 };
 
 template<typename T>
@@ -215,7 +225,7 @@ bool VolatileRepository<T>::initialize(const std::shared_ptr<Configure> &configu
     if (configure->get(strstream.str(), value)) {
       if (core::Property::StringToInt(value, max_bytes)) {
         if (max_bytes <= 0) {
-          max_size_ = std::numeric_limits<uint32_t>::max();
+          max_size_ = (std::numeric_limits<uint32_t>::max)();
         } else {
           max_size_ = max_bytes;
         }
@@ -280,6 +290,17 @@ bool VolatileRepository<T>::Put(T key, const uint8_t *buf, size_t bufLen) {
   logger_->log_debug("VolatileRepository -- put %u %u", current_size_.load(), current_index_.load());
   return true;
 }
+
+template<typename T>
+bool VolatileRepository<T>::MultiPut(const std::vector<std::pair<T, std::unique_ptr<io::DataStream>>>& data) {
+  for (const auto& item : data) {
+    if (!Put(item.first, item.second->getBuffer(), item.second->getSize())) {
+      return false;
+    }
+  }
+  return true;
+}
+
 /**
  * Deletes the key
  * @return status of the delete operation
@@ -306,7 +327,6 @@ bool VolatileRepository<T>::Delete(T key) {
  */
 template<typename T>
 bool VolatileRepository<T>::Get(const T &key, std::string &value) {
-
   for (auto ent : value_vector_) {
     // let the destructor do the cleanup
     RepoValue<T> repo_value;
@@ -393,11 +413,11 @@ void VolatileRepository<T>::start() {
 #pragma GCC diagnostic pop
 #endif
 
-} /* namespace repository */
-} /* namespace core */
-} /* namespace minifi */
-} /* namespace nifi */
-} /* namespace apache */
-} /* namespace org */
+}  // namespace repository
+}  // namespace core
+}  // namespace minifi
+}  // namespace nifi
+}  // namespace apache
+}  // namespace org
 
-#endif /* LIBMINIFI_INCLUDE_CORE_REPOSITORY_VolatileRepository_H_ */
+#endif  // LIBMINIFI_INCLUDE_CORE_REPOSITORY_VOLATILEREPOSITORY_H_

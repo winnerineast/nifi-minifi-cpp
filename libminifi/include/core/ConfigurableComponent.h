@@ -19,6 +19,9 @@
 #ifndef LIBMINIFI_INCLUDE_CORE_CONFIGURABLECOMPONENT_H_
 #define LIBMINIFI_INCLUDE_CORE_CONFIGURABLECOMPONENT_H_
 
+#include <string>
+#include <vector>
+
 #include "Core.h"
 #include <mutex>
 #include <iostream>
@@ -45,7 +48,6 @@ namespace core {
  */
 class ConfigurableComponent {
  public:
-
   ConfigurableComponent();
 
   explicit ConfigurableComponent(const ConfigurableComponent &&other);
@@ -98,11 +100,13 @@ class ConfigurableComponent {
    * @return result of set operation.
    */
   bool setSupportedProperties(std::set<Property> properties);
+
   /**
-   * Sets supported properties for the ConfigurableComponent
-   * @param supported properties
-   * @return result of set operation.
+   * Updates the supported properties for the ConfigurableComponent
+   * @param new supported properties
+   * @return result of update operation.
    */
+  bool updateSupportedProperties(std::set<Property> properties);
 
   /**
    * Gets whether or not this processor supports dynamic properties.
@@ -176,12 +180,10 @@ class ConfigurableComponent {
   virtual ~ConfigurableComponent();
 
   virtual void initialize() {
-
   }
 
  protected:
-
-  void setAcceptAllProperties(){
+  void setAcceptAllProperties() {
     accept_all_properties_ = true;
   }
 
@@ -205,34 +207,38 @@ class ConfigurableComponent {
   std::shared_ptr<logging::Logger> logger_;
 
   bool createDynamicProperty(const std::string &name, const std::string &value);
-
 };
 
 template<typename T>
-bool ConfigurableComponent::getProperty(const std::string name, T &value) const{
+bool ConfigurableComponent::getProperty(const std::string name, T &value) const {
   std::lock_guard<std::mutex> lock(configuration_mutex_);
 
-   auto &&it = properties_.find(name);
-   if (it != properties_.end()) {
-     Property item = it->second;
-     value = static_cast<T>(item.getValue());
-     if (item.getValue().getValue() != nullptr){
-       logger_->log_debug("Component %s property name %s value %s", name, item.getName(), item.getValue().to_string());
-       return true;
-     }
-     else{
-       logger_->log_debug("Component %s property name %s, empty value", name, item.getName());
-       return false;
-     }
-   } else {
-     return false;
-   }
+  auto &&it = properties_.find(name);
+  if (it != properties_.end()) {
+    const Property& item = it->second;
+    if (item.getValue().getValue() == nullptr) {
+      // empty value
+      if (item.getRequired()) {
+        logger_->log_error("Component %s required property %s is empty", name, item.getName());
+        throw utils::internal::RequiredPropertyMissingException("Required property is empty: " + item.getName());
+      }
+      logger_->log_debug("Component %s property name %s, empty value", name, item.getName());
+      return false;
+    }
+    logger_->log_debug("Component %s property name %s value %s", name, item.getName(), item.getValue().to_string());
+    // cast throws if the value is invalid
+    value = static_cast<T>(item.getValue());
+    return true;
+  } else {
+    logger_->log_warn("Could not find property %s", name);
+    return false;
+  }
 }
 
-} /* namespace core */
-} /* namespace minifi */
-} /* namespace nifi */
-} /* namespace apache */
-} /* namespace org */
+}  // namespace core
+}  // namespace minifi
+}  // namespace nifi
+}  // namespace apache
+}  // namespace org
 
-#endif /* LIBMINIFI_INCLUDE_CORE_CONFIGURABLECOMPONENT_H_ */
+#endif  // LIBMINIFI_INCLUDE_CORE_CONFIGURABLECOMPONENT_H_

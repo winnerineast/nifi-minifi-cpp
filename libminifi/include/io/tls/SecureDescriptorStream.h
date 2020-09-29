@@ -15,18 +15,22 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#ifndef LIBMINIFI_INCLUDE_IO_SECUREDESCRIPTORSTREAM_H_
-#define LIBMINIFI_INCLUDE_IO_SECUREDESCRIPTORSTREAM_H_
+#ifndef LIBMINIFI_INCLUDE_IO_TLS_SECUREDESCRIPTORSTREAM_H_
+#define LIBMINIFI_INCLUDE_IO_TLS_SECUREDESCRIPTORSTREAM_H_
 
-#include <openssl/ssl.h>
 #include <openssl/err.h>
-#include <iostream>
+#include <openssl/ssl.h>
+
 #include <cstdint>
+#include <iostream>
+#include <memory>
 #include <string>
-#include "io/EndianCheck.h"
-#include "io/BaseStream.h"
-#include "io/Serializable.h"
+#include <vector>
+
 #include "core/logging/LoggerConfiguration.h"
+#include "io/BaseStream.h"
+#include "io/EndianCheck.h"
+#include "io/Serializable.h"
 
 namespace org {
 namespace apache {
@@ -49,17 +53,15 @@ class SecureDescriptorStream : public io::BaseStream {
    */
   explicit SecureDescriptorStream(int fd, SSL *s);
 
-  virtual ~SecureDescriptorStream() {
-
-  }
+  ~SecureDescriptorStream() override = default;
 
   /**
    * Skip to the specified offset.
    * @param offset offset to which we will skip
    */
-  void seek(uint64_t offset);
+  void seek(uint64_t offset) override;
 
-  const uint64_t getSize() const {
+  const uint64_t getSize() const override {
     return -1;
   }
 
@@ -69,13 +71,13 @@ class SecureDescriptorStream : public io::BaseStream {
    * @param buf buffer in which we extract data
    * @param buflen
    */
-  virtual int readData(std::vector<uint8_t> &buf, int buflen);
+  int readData(std::vector<uint8_t> &buf, int buflen) override;
   /**
    * Reads data and places it into buf
    * @param buf buffer in which we extract data
    * @param buflen
    */
-  virtual int readData(uint8_t *buf, int buflen);
+  int readData(uint8_t *buf, int buflen) override;
 
   /**
    * Write value to the stream using std::vector
@@ -90,12 +92,12 @@ class SecureDescriptorStream : public io::BaseStream {
    * @param value value to write
    * @param size size of value
    */
-  virtual int writeData(uint8_t *value, int size);
+  int writeData(uint8_t *value, int size) override;
 
   /**
    * Returns the underlying buffer
    * @return vector's array
-   **/
+   */
   const uint8_t *getBuffer() const {
     throw std::runtime_error("Stream does not support this operation");
   }
@@ -106,7 +108,7 @@ class SecureDescriptorStream : public io::BaseStream {
    * @param stream stream from which we will read
    * @return resulting read size
    **/
-  virtual int read(uint8_t &value);
+  int read(uint8_t &value) override;
 
   /**
    * reads two bytes from the stream
@@ -114,7 +116,7 @@ class SecureDescriptorStream : public io::BaseStream {
    * @param stream stream from which we will read
    * @return resulting read size
    **/
-  virtual int read(uint16_t &base_value, bool is_little_endian = false);
+  int read(uint16_t &base_value, bool is_little_endian = false) override;
 
   /**
    * reads a byte from the stream
@@ -122,7 +124,7 @@ class SecureDescriptorStream : public io::BaseStream {
    * @param stream stream from which we will read
    * @return resulting read size
    **/
-  virtual int read(char &value);
+  int read(char &value) override;
 
   /**
    * reads a byte array from the stream
@@ -131,7 +133,7 @@ class SecureDescriptorStream : public io::BaseStream {
    * @param stream stream from which we will read
    * @return resulting read size
    **/
-  virtual int read(uint8_t *value, int len);
+  int read(uint8_t *value, int len) override;
 
   /**
    * reads four bytes from the stream
@@ -139,7 +141,7 @@ class SecureDescriptorStream : public io::BaseStream {
    * @param stream stream from which we will read
    * @return resulting read size
    **/
-  virtual int read(uint32_t &value, bool is_little_endian = false);
+  int read(uint32_t &value, bool is_little_endian = false) override;
 
   /**
    * reads eight byte from the stream
@@ -147,7 +149,7 @@ class SecureDescriptorStream : public io::BaseStream {
    * @param stream stream from which we will read
    * @return resulting read size
    **/
-  virtual int read(uint64_t &value, bool is_little_endian = false);
+  int read(uint64_t &value, bool is_little_endian = false) override;
 
 
   /**
@@ -156,10 +158,9 @@ class SecureDescriptorStream : public io::BaseStream {
    * @param stream stream from which we will read
    * @return resulting read size
    **/
-  virtual int readUTF(std::string &str, bool widen = false);
+  int readUTF(std::string &str, bool widen = false) override;
 
  protected:
-
   /**
    * Creates a vector and returns the vector using the provided
    * type name.
@@ -167,7 +168,16 @@ class SecureDescriptorStream : public io::BaseStream {
    * @returns vector.
    */
   template<typename T>
-  std::vector<uint8_t> readBuffer(const T&);
+  std::vector<uint8_t> readBuffer(const T& t);
+
+  /**
+   * Populates the vector using the provided type name.
+   * @param buf output buffer
+   * @param t incoming object
+   * @returns number of bytes read.
+   */
+  template<typename T>
+  int readBuffer(std::vector<uint8_t>& buf, const T& t);
   std::recursive_mutex file_lock_;
 
   int fd_;
@@ -175,15 +185,13 @@ class SecureDescriptorStream : public io::BaseStream {
   SSL *ssl_;
 
  private:
-
   std::shared_ptr<logging::Logger> logger_;
-
 };
 
-} /* namespace io */
-} /* namespace minifi */
-} /* namespace nifi */
-} /* namespace apache */
-} /* namespace org */
+}  // namespace io
+}  // namespace minifi
+}  // namespace nifi
+}  // namespace apache
+}  // namespace org
 
-#endif /* LIBMINIFI_INCLUDE_IO_SECUREDESCRIPTORSTREAM_H_ */
+#endif  // LIBMINIFI_INCLUDE_IO_TLS_SECUREDESCRIPTORSTREAM_H_

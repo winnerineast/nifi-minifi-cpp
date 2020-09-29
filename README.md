@@ -13,6 +13,8 @@
   limitations under the License.
 -->
 
+[<img src="https://nifi.apache.org/assets/images/minifi/minifi-logo.svg" width="300" height="126" alt="Apache NiFi MiNiFi"/>](https://nifi.apache.org/minifi/)
+
 # Apache NiFi -  MiNiFi - C++ [![Linux/Mac Build Status](https://travis-ci.org/apache/nifi-minifi-cpp.svg?branch=master)](https://travis-ci.org/apache/nifi-minifi-cpp) [![Windows Build Status](https://ci.appveyor.com/api/projects/status/njagiyqmopexidsv/branch/master?svg=true)](https://ci.appveyor.com/project/ApacheSoftwareFoundation/nifi-minifi-cpp) 
 
 MiNiFi is a child project effort of Apache NiFi.  This repository is for a native implementation in C++.
@@ -70,11 +72,13 @@ Through JNI extensions you can run NiFi processors using NARs. The JNI extension
 | Extension Set        | Processors           | CMAKE Flag  |
 | ------------- |:-------------| :-----|
 | Archive Extensions    | [ApplyTemplate](PROCESSORS.md#applytemplate)<br/>[CompressContent](PROCESSORS.md#compresscontent)<br/>[ManipulateArchive](PROCESSORS.md#manipulatearchive)<br/>[MergeContent](PROCESSORS.md#mergecontent)<br/>[FocusArchiveEntry](PROCESSORS.md#focusarchiveentry)<br/>[UnfocusArchiveEntry](PROCESSORS.md#unfocusarchiveentry)      |   -DBUILD_LIBARCHIVE=ON |
+| AWS | [AWSCredentialsService](CONTROLLERS.md#awsCredentialsService) | -DENABLE_AWS=ON  |
 | CURL | [InvokeHTTP](PROCESSORS.md#invokehttp)      |    -DDISABLE_CURL=ON  |
 | GPS | GetGPS      |    -DENABLE_GPS=ON  |
 | Kafka | [PublishKafka](PROCESSORS.md#publishkafka)      |    -DENABLE_LIBRDKAFKA=ON  |
 | JNI | **NiFi Processors**     |    -DENABLE_JNI=ON  |
 | MQTT | [ConsumeMQTT](PROCESSORS.md#consumeMQTT)<br/>[PublishMQTT](PROCESSORS.md#publishMQTT)     |    -DENABLE_MQTT=ON  |
+| OpenCV | [CaptureRTSPFrame](PROCESSORS.md#captureRTSPFrame)     |    -DENABLE_OPENCV=ON  |
 | PCAP | [CapturePacket](PROCESSORS.md#capturepacket)      |    -DENABLE_PCAP=ON  |
 | Scripting | [ExecuteScript](PROCESSORS.md#executescript)<br/>**Custom Python Processors**     |    -DDISABLE_SCRIPTING=ON  |
 | SQLLite | [ExecuteSQL](PROCESSORS.md#executesql)<br/>[PutSQL](PROCESSORS.md#putsql)      |    -DENABLE_SQLITE=ON  |
@@ -84,10 +88,11 @@ Through JNI extensions you can run NiFi processors using NARs. The JNI extension
  Please see our [Python guide](extensions/script/README.md) on how to write Python processors and use them within MiNiFi C++. 
 
 ## Caveats
-* 0.5.0 represents a GA-release. We follow semver so you can expect API and ABI compatibility within minor releases. See [semver's website](https://semver.org/) for more information
+* 0.7.0 represents a GA-release. We follow semver so you can expect API and ABI compatibility within minor releases. See [semver's website](https://semver.org/) for more information
 * Build and usage currently only supports Linux and OS X environments. MiNiFi C++ can be built and run through the Windows Subsystem for Linux but we provide no support for this platform.
 * Native Windows builds are possible with limited support. OPENSSL_ROOT_DIR must be specified to support OpenSSL support within your build.
 * Provenance events generation is supported and are persisted using RocksDB. Volatile repositories can be used on systems without persistent storage.
+* If MiNiFi C++ is built with the OPC-UA extension enabled, it bundles [open62541](https://open62541.org/), which is available under the Mozilla Public License Version 2.0, a Category B license under [ASF 3rd party license policy](https://www.apache.org/legal/resolved.html#category-b).
 
 ## System Requirements
 
@@ -95,7 +100,7 @@ Through JNI extensions you can run NiFi processors using NARs. The JNI extension
 
 #### Utilities
 * CMake
-  * 3.1 or greater
+  * 3.7 or greater
 * gcc
   * 4.8.4 or greater
 * g++
@@ -136,7 +141,7 @@ and rebuild.
 #### Libraries / Development Headers
 * libboost and boost-devel
   * 1.48.0 or greater
-* libcurl-openssl (If not available or desired, NSS will be used by applying -DUSE_CURL_NSS)
+* libcurl-openssl (If not available or desired, NSS will be used)
 * librocksdb4.1 and librocksdb-dev
 * libuuid and uuid-dev
 * openssl
@@ -198,7 +203,7 @@ On all distributions please use -DUSE_SHARED_LIBS=OFF to statically link zlib, l
 #### Libraries
 * libuuid
 * librocksdb *** IF NOT INSTALLED, WILL BE BUILT FROM THIRD PARTY DIRECTORY ***
-* libcurl-openssl (If not available or desired, NSS will be used by applying -DUSE_CURL_NSS)
+* libcurl-openssl (If not available or desired, NSS will be used)
 * libssl and libcrypto from openssl 
 * libarchive
 * librdkafka
@@ -320,10 +325,10 @@ $ # It is recommended that you install bison from source as HomeBrew now uses an
 
 ### Bootstrapping
 
-- MiNiFi C++ offers a bootstrap script in the root of our github repo that will boot strap the cmake and build process for you without the need to install dependencies yourself. To use this process, please run the command boostrap.sh from the root of the MiNiFi C++ source tree.
+- MiNiFi C++ offers a bootstrap script in the root of our github repo that will boot strap the cmake and build process for you without the need to install dependencies yourself. To use this process, please run the command `boostrap.sh` from the root of the MiNiFi C++ source tree.
 
 
-- Per the table, below, you will be presented with a menu guided bootstrap process. You may enable and disable extensions ( further defined below ). Once you are finished selecting the features you wish to build, enter N to continue with the process. CMAKE dependencies will be resolved for your distro. You may enter command line options -n to force yes to all prompts ( including the package installation prompts ) and -b to automatically run make once the cmake process is complete. Alternatively, you may include the package argument to boostrap, -p, which will run make package.
+- Per the table, below, you will be presented with a menu guided bootstrap process. You may enable and disable extensions ( further defined below ). Once you are finished selecting the features you wish to build, enter P to continue with the process. CMAKE dependencies will be resolved for your distro. You may enter command line options -n to force yes to all prompts ( including the package installation prompts ) and -b to automatically run make once the cmake process is complete. Alternatively, you may include the package argument to boostrap, -p, which will run make package.
 
 - If you provide -b or -p to bootstrap.sh, you do not need to follow the Building section, below. If you do not provide these arguments you may skip the cmake .. section from Building.
 
@@ -332,9 +337,9 @@ $ # It is recommended that you install bison from source as HomeBrew now uses an
   $ ./bootstrap.sh
   # CMAKE Build dir exists, should we overwrite your build directory before we begin?
     If you have already bootstrapped, bootstrapping again isn't necessary to run make [ Y/N ] Y
-  $  ****************************************
+  $ *****************************************
      Select MiNiFi C++ Features to toggle.
-    ****************************************
+    *****************************************
     A. Persistent Repositories .....Enabled
     B. Lib Curl Features ...........Enabled
     C. Lib Archive Features ........Enabled
@@ -345,15 +350,31 @@ $ # It is recommended that you install bison from source as HomeBrew now uses an
     H. USB Camera support ..........Disabled
     I. GPS support .................Disabled
     J. TensorFlow Support ..........Disabled
-    K. Enable all extensions
-    L. Portable Build ..............Enabled
-    M. Build with Debug symbols ....Disabled
-    N. Continue with these options
-    Q. Exit
+    K. Bustache Support ............Disabled
+    L. MQTT Support ................Disabled
+    M. SQLite Support ..............Disabled
+    N. Python Support ..............Disabled
+    O. COAP Support ................Enabled
+    S. SFTP Support ................Disabled
+    V. AWS Support .................Disabled
+    T. OpenCV Support ..............Disabled
+    U. OPC-UA Support ..............Disabled
+    W. SQL Support .................Disabled
+    ****************************************
+                Build Options.
+    ****************************************
+    1. Disable Tests ...............Disabled
+    2. Enable all extensions
+    3. Enable JNI Support ..........Disabled
+    4. Use Shared Dependency Links .Enabled
+    5. Build Profile ...............RelWithDebInfo Debug MinSizeRel Release
+    P. Continue with these options
+    Q. Quit
     * Extension cannot be installed due to
-      version of cmake or other software
+      version of cmake or other software, or
+      incompatibility with other extensions
     
-    Enter choice [ A - N ] 
+    Enter choice [ A - W or 1-4 ] 
   ```
 
 - Boostrap now saves state between runs. State will automatically be saved. Provide -c or --clear to clear this state. The -i option provides a guided menu install with the ability to change 
@@ -415,7 +436,7 @@ advanced features.
   CPack: Install projects
   CPack: - Install directory: ~/Development/code/apache/nifi-minifi-cpp
   CPack: Create package
-  CPack: - package: ~/Development/code/apache/nifi-minifi-cpp/build/nifi-minifi-cpp-0.6.0-bin.tar.gz generated.
+  CPack: - package: ~/Development/code/apache/nifi-minifi-cpp/build/nifi-minifi-cpp-0.7.0-bin.tar.gz generated.
   ```
 
 - Create a source assembly located in your build directory with suffix -source.tar.gz
@@ -427,18 +448,18 @@ advanced features.
   CPack: Install projects
   CPack: - Install directory: ~/Development/code/apache/nifi-minifi-cpp
   CPack: Create package
-  CPack: - package: ~/Development/code/apache/nifi-minifi-cpp/build/nifi-minifi-cpp-0.6.0-source.tar.gz generated.
+  CPack: - package: ~/Development/code/apache/nifi-minifi-cpp/build/nifi-minifi-cpp-0.7.0-source.tar.gz generated.
   ```
 
 - (Optional) Create a Docker image from the resulting binary assembly output from "make package".
 ```
 ~/Development/code/apache/nifi-minifi-cpp/build
 $ make docker
-NiFi-MiNiFi-CPP Version: 0.6.0
+NiFi-MiNiFi-CPP Version: 0.7.0
 Current Working Directory: /Users/jdyer/Development/github/nifi-minifi-cpp/docker
 CMake Source Directory: /Users/jdyer/Development/github/nifi-minifi-cpp
-MiNiFi Package: nifi-minifi-cpp-0.6.0-bin.tar.gz
-Docker Command: 'docker build --build-arg UID=1000 --build-arg GID=1000 --build-arg MINIFI_VERSION=0.6.0 --build-arg MINIFI_PACKAGE=nifi-minifi-cpp-0.6.0-bin.tar.gz -t apacheminificpp:0.6.0 .'
+MiNiFi Package: nifi-minifi-cpp-0.7.0-bin.tar.gz
+Docker Command: 'docker build --build-arg UID=1000 --build-arg GID=1000 --build-arg MINIFI_VERSION=0.7.0 --build-arg MINIFI_PACKAGE=nifi-minifi-cpp-0.7.0-bin.tar.gz -t apacheminificpp:0.7.0 .'
 Sending build context to Docker daemon 777.2 kB
 Step 1 : FROM alpine:3.5
  ---> 88e169ea8f46
@@ -527,6 +548,14 @@ On Windows it is suggested that MSI be used for installation.
 ### Extensions
 
 Please see [Extensions.md](Extensions.md) on how to build and run conditionally built dependencies and extensions.
+
+### Recommended Antivirus Exclusions
+
+Antivirus software can take a long time to scan directories and the files within them. Additionally, if the antivirus software locks files or directories during a scan, those resources are unavailable to MiNiFi processes, causing latency or unavailability of these resources in a MiNiFi instance. To prevent these performance and reliability issues from occurring, it is highly recommended to configure your antivirus software to skip scans on the following MiNiFi C++ directories:
+
+- content_repository
+- flowfile_repository
+- provenance_repository
 
 ## Operations
 See our [operations documentation for additional inforomation on how to manage instances](OPS.md)

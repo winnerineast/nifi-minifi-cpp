@@ -25,7 +25,7 @@ ENDIF(POLICY CMP0048)
 
 
 
-include_directories(../main/ ../libminifi/include  ../libminifi/include/c2  ../libminifi/include/c2/protocols/  ../libminifi/include/core/state ./libminifi/include/core/statemanagement/metrics  ../libminifi/include/core/yaml  ../libminifi/include/core  ../thirdparty/cron ../thirdparty/spdlog-20170710/include ../thirdparty/concurrentqueue ../thirdparty/yaml-cpp-yaml-cpp-20171024/include ${CIVET_THIRDPARTY_ROOT}/include ../thirdparty/cxxopts/include  ../thirdparty/)
+include_directories(../main/ ../libminifi/include  ../libminifi/include/c2  ../libminifi/include/c2/protocols/  ../libminifi/include/core/state ./libminifi/include/core/statemanagement/metrics  ../libminifi/include/core/yaml  ../libminifi/include/core)
 
 
 if(WIN32)
@@ -46,60 +46,17 @@ else()
  message(STATUS "The compiler ${CMAKE_CXX_COMPILER} has no C++11 support. Please use a different C++ compiler.")
 endif()
 
-add_executable(minificontroller MiNiFiController.cpp)
-if(THREADS_HAVE_PTHREAD_ARG)
-  target_compile_options(PUBLIC minificontroller "-pthread")
-endif()
-if(CMAKE_THREAD_LIBS_INIT)
-  target_link_libraries(minificontroller "${CMAKE_THREAD_LIBS_INIT}")
-endif()
+add_executable(minificontroller MiNiFiController.cpp ../main/MainHelper.cpp)
+target_wholearchive_library(minificontroller minifi)
 
-# Include UUID
-find_package(UUID REQUIRED)
+target_link_libraries(minificontroller cxxopts Threads::Threads)
 
-# Include OpenSSL
-find_package(OpenSSL )
-if (OPENSSL_FOUND)
-include_directories(${OPENSSL_INCLUDE_DIR})
-endif(OPENSSL_FOUND)
+get_property(extensions GLOBAL PROPERTY EXTENSION-OPTIONS)
+foreach(EXTENSION ${extensions})
+	target_wholearchive_library(minificontroller ${EXTENSION})
+endforeach()
 
-# Link against minifi, yaml-cpp, civetweb-cpp, uuid, openssl, jsoncpp and rocksdb
-target_link_libraries(minificontroller minifi ${DL})
-
-
-add_dependencies(minificontroller minifi)
-
-if (APPLE)
-	target_link_libraries (minificontroller -Wl,-all_load minifi)
-else ()
-	target_link_libraries (minificontroller -Wl,--whole-archive minifi -Wl,--no-whole-archive)
-endif ()
-
-if (WIN32)
-	include_directories("../thirdparty/Simple-Windows-Posix-Semaphore")
-  	target_link_libraries(minificontroller semaphore)
-endif()
-
-target_link_libraries(minificontroller yaml-cpp c-library civetweb-cpp ${JSON_CPP_LIB} ${UUID_LIBRARIES} cxxopts)
-
-
-if (APPLE)
-	get_property(extensions GLOBAL PROPERTY EXTENSION-OPTIONS)
-	foreach(EXTENSION ${extensions})
-		message("Linking against ${EXTENSION}")
-		add_dependencies(minificontroller ${EXTENSION})
-		target_link_libraries (minificontroller -Wl,-all_load ${EXTENSION})
-	endforeach()    
-else ()
-	get_property(extensions GLOBAL PROPERTY EXTENSION-OPTIONS)
-	foreach(EXTENSION ${extensions})
-	add_dependencies(minificontroller ${EXTENSION})
-	  target_link_libraries (minificontroller -Wl,--whole-archive ${EXTENSION} -Wl,--no-whole-archive)
-	endforeach()
-endif ()
-
-set_target_properties(minificontroller
-        PROPERTIES OUTPUT_NAME minificontroller)
+set_target_properties(minificontroller PROPERTIES OUTPUT_NAME minificontroller)
 
 install(TARGETS minificontroller
         RUNTIME

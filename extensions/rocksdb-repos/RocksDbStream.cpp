@@ -18,9 +18,11 @@
 
 #include "RocksDbStream.h"
 #include <fstream>
+#include <utility>
 #include <vector>
 #include <memory>
 #include <string>
+#include <Exception.h>
 #include "io/validation.h"
 namespace org {
 namespace apache {
@@ -28,19 +30,13 @@ namespace nifi {
 namespace minifi {
 namespace io {
 
-RocksDbStream::RocksDbStream(const std::string &path, rocksdb::DB *db, bool write_enable)
+RocksDbStream::RocksDbStream(std::string path, rocksdb::DB *db, bool write_enable)
     : BaseStream(),
-      path_(path),
+      path_(std::move(path)),
       write_enable_(write_enable),
       db_(db),
       logger_(logging::LoggerFactory<RocksDbStream>::getLogger()) {
-  rocksdb::Status status;
-  status = db_->Get(rocksdb::ReadOptions(), path_, &value_);
-  if (status.ok()) {
-    exists_ = true;
-  } else {
-    exists_ = false;
-  }
+  exists_ = db_->Get(rocksdb::ReadOptions(), path_, &value_).ok();
   offset_ = 0;
   size_ = value_.size();
 }
@@ -53,10 +49,14 @@ void RocksDbStream::seek(uint64_t offset) {
 }
 
 int RocksDbStream::writeData(std::vector<uint8_t> &buf, int buflen) {
-  if (buf.capacity() < buflen) {
+  if (buflen < 0) {
+    throw minifi::Exception{ExceptionType::GENERAL_EXCEPTION, "negative buflen"};
+  }
+
+  if (buf.size() < static_cast<size_t>(buflen)) {
     return -1;
   }
-  return writeData(reinterpret_cast<uint8_t *>(&buf[0]), buflen);
+  return writeData(buf.data(), buflen);
 }
 
 // data stream overrides
@@ -80,21 +80,23 @@ int RocksDbStream::writeData(uint8_t *value, int size) {
 }
 
 template<typename T>
-inline std::vector<uint8_t> RocksDbStream::readBuffer(const T& t) {
-  std::vector<uint8_t> buf;
+inline int RocksDbStream::readBuffer(std::vector<uint8_t>& buf, const T& t) {
   buf.resize(sizeof t);
-  readData(reinterpret_cast<uint8_t *>(&buf[0]), sizeof(t));
-  return buf;
+  return readData(reinterpret_cast<uint8_t *>(&buf[0]), sizeof(t));
 }
 
 int RocksDbStream::readData(std::vector<uint8_t> &buf, int buflen) {
-  if (buf.capacity() < buflen) {
+  if (buflen < 0) {
+    throw minifi::Exception{ExceptionType::GENERAL_EXCEPTION, "negative buflen"};
+  }
+
+  if (buf.size() < buflen) {
     buf.resize(buflen);
   }
-  int ret = readData(reinterpret_cast<uint8_t*>(&buf[0]), buflen);
+  int ret = readData(buf.data(), buflen);
 
   if (ret < buflen) {
-    buf.resize(ret);
+    buf.resize((std::max)(ret, 0));
   }
   return ret;
 }

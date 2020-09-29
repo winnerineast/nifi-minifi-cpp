@@ -17,11 +17,13 @@
 # under the License.
 #
 
-cmake_minimum_required(VERSION 3.0)
+cmake_minimum_required(VERSION 3.7)
+cmake_policy(SET CMP0065 OLD) # default export policy, required for self-dlopen
+
 project(nifi-minifi-cpp)
 set(PROJECT_NAME "nifi-minifi-cpp")
 set(PROJECT_VERSION_MAJOR 0)
-set(PROJECT_VERSION_MINOR 6)
+set(PROJECT_VERSION_MINOR 7)
 set(PROJECT_VERSION_PATCH 0)
 
 include(CMakeDependentOption)
@@ -29,99 +31,55 @@ include(CheckIncludeFile)
 include(FeatureSummary)
 include(ExternalProject)
 
+# Provide custom modules for the project
+list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake")
+include(WholeArchive)
+
 option(SKIP_TESTS "Skips building all tests." OFF)
-
 option(PORTABLE "Instructs the compiler to remove architecture specific optimizations" ON)
-
 option(USE_SHARED_LIBS "Builds using shared libraries" ON)
-
 option(ENABLE_PYTHON "Instructs the build system to enable building shared objects for the python lib" OFF)
-
 cmake_dependent_option(STATIC_BUILD "Attempts to statically link as many dependencies as possible." ON "NOT ENABLE_PYTHON; NOT USE_SHARED_LIBS" OFF)  
-
-cmake_dependent_option(USE_SYSTEM_OPENSSL "Instructs the build system to search for and use an SSL library available in the host system" ON "NOT STATIC_BUILD" OFF)
-
+option(LIBC_STATIC "Instructs the build system to statically link libstdc++ and glibc into minifiexe. Experiemental" OFF)
 option(OPENSSL_OFF "Disables OpenSSL" OFF)
 option(ENABLE_OPS "Enable Operations/zlib Tools" ON)
-option(USE_SYSTEM_UUID "Instructs the build system to search for and use a UUID library available in the host system" OFF)
-
 option(ENABLE_JNI "Instructs the build system to enable the JNI extension" OFF)
-
-cmake_dependent_option(USE_SYSTEM_CURL "Instructs the build system to search for and use a cURL library available in the host system" ON "NOT STATIC_BUILD" OFF)
-
+option(ENABLE_OPENCV "Instructs the build system to enable the OpenCV extension" OFF)
+option(ENABLE_OPC "Instructs the build system to enable the OPC extension" OFF)
 option(BUILD_SHARED_LIBS "Build yaml cpp shared lib" OFF)
 
-cmake_dependent_option(USE_SYSTEM_ZLIB "Instructs the build system to search for and use a zlib library available in the host system" ON "NOT STATIC_BUILD" OFF)
-
-option(USE_SYSTEM_BZIP2 "Instructs the build system to search for and use a bzip2 library available in the host system" ON)
 option(BUILD_ROCKSDB "Instructs the build system to use RocksDB from the third party directory" ON)
 option(FORCE_WINDOWS "Instructs the build system to force Windows builds when WIN32 is specified" OFF)
 option(DISABLE_CURL "Disables libCurl Properties." OFF)
 
+option(USE_GOLD_LINKER "Use Gold Linker" OFF)
+option(INSTALLER_MERGE_MODULES "Creates installer with merge modules" OFF)
+# This is needed for ninja:
+# By default, neither Clang or GCC will add ANSI-formatted colors to your output if they detect
+# the output medium is not a terminal. This means no coloring when using a generator
+# different than "GNU Makefiles".
+option (FORCE_COLORED_OUTPUT "Always produce ANSI-colored output (GNU/Clang only)." FALSE)
+if (${FORCE_COLORED_OUTPUT})
+	message("CMAKE_CXX_COMPILER_ID is ${CMAKE_CXX_COMPILER_ID}")
+	if ("${CMAKE_CXX_COMPILER_ID}" STREQUAL "GNU")
+	   add_compile_options (-fdiagnostics-color=always)
+	elseif ("${CMAKE_CXX_COMPILER_ID}" STREQUAL "Clang")
+	   add_compile_options (-fcolor-diagnostics)
+	elseif ("${CMAKE_CXX_COMPILER_ID}" STREQUAL "AppleClang")
+	   add_compile_options (-fcolor-diagnostics)
+	endif ()
+endif ()
 
-if (OPENSSL_ROOT_DIR )
-	set(OPENSSL_PASSTHROUGH "-DOPENSSL_ROOT_DIR=${OPENSSL_ROOT_DIR}")
-endif()
+cmake_dependent_option(ASAN_BUILD "Uses AddressSanitizer to instrument the code" OFF "NOT WIN32" OFF)
 
-if(NOT WIN32)
-	if (ENABLE_JNI)
-	if (NOT DISABLE_JEMALLOC)
-	  set(BASE_DIR "${CMAKE_CURRENT_BINARY_DIR}/thirdparty/jemalloc")
-	  
-	  set(DIR "${BASE_DIR}/extensions/jemalloc-src")
-	  set(JE_BYPRODUCT "${DIR}/lib/libjemalloc.a")
-	  ExternalProject_Add(
-	    jemalloc-external
-	    GIT_REPOSITORY "https://github.com/jemalloc/jemalloc.git"
-	    GIT_TAG "61efbda7098de6fe64c362d309824864308c36d4" 
-	    PREFIX "${BASE_DIR}/extensions/jemalloc"
-	    BUILD_IN_SOURCE true
-	    SOURCE_DIR "${DIR}"
-	    BUILD_COMMAND make
-	    CMAKE_COMMAND ""
-	    UPDATE_COMMAND ""
-	    BUILD_BYPRODUCTS ${JE_BYPRODUCT} 
-	    INSTALL_COMMAND ${CMAKE_COMMAND}  -E echo "Skipping install step."
-	    CONFIGURE_COMMAND ""
-	    PATCH_COMMAND ./autogen.sh && ./configure 
-	    STEP_TARGETS build
-	    EXCLUDE_FROM_ALL TRUE
-	  )
-	  
-	  add_library(jemalloc STATIC IMPORTED)
-	  set_target_properties(jemalloc PROPERTIES IMPORTED_LOCATION "${JE_BYPRODUCT}")
-	  add_dependencies(jemalloc jemalloc-external)
-	  set(JEMALLOC_FOUND "YES" CACHE STRING "" FORCE)
-	  set(JEMALLOC_INCLUDE_DIRS "${DIR}/include" CACHE STRING "" FORCE)
-	  set(JEMALLOC_LIBRARIES jemalloc CACHE STRING "" FORCE)
-	  set(JEMALLOC_LIBRARY jemalloc CACHE STRING "" FORCE)
-	  set(JEMALLOC_LIBRARY jemalloc CACHE STRING "" FORCE)
-
-	endif()
-	set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DENABLE_JNI")
-	set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -DENABLE_JNI")
-
-	endif()
-endif()
-
-set(PASSTHROUGH_CMAKE_ARGS -DANDROID_ABI=${ANDROID_ABI}
-                           -DANDROID_PLATFORM=${ANDROID_PLATFORM}
-                           -DANDROID_STL=${ANDROID_STL}
-                           -DCMAKE_LIBRARY_OUTPUT_DIRECTORY=${CMAKE_LIBRARY_OUTPUT_DIRECTORY}
-                           -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}
-                           -DANDROID_NDK=${ANDROID_NDK}
-                           -DCMAKE_CXX_FLAGS=${CMAKE_CXX_FLAGS}
-                           -DCMAKE_TOOLCHAIN_FILE=${CMAKE_TOOLCHAIN_FILE}
-                           -DCMAKE_MAKE_PROGRAM=${CMAKE_MAKE_PROGRAM}
-                           -DCMAKE_C_COMPILER=${CMAKE_C_COMPILER}
-                           -DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}
-                           -DCMAKE_FIND_ROOT_PATH=${CMAKE_FIND_ROOT_PATH}
-                           -DCMAKE_FIND_ROOT_PATH_MODE_PROGRAM=${CMAKE_FIND_ROOT_PATH_MODE_PROGRAM}
-                           -DCMAKE_FIND_ROOT_PATH_MODE_LIBRARY=${CMAKE_FIND_ROOT_PATH_MODE_LIBRARY}
-                           -DCMAKE_FIND_ROOT_PATH_MODE_INCLUDE=${CMAKE_FIND_ROOT_PATH_MODE_INCLUDE}
-                           -DCMAKE_INSTALL_PREFIX=${CMAKE_INSTALL_PREFIX}
-						   ${OPENSSL_PASSTHROUGH}
-                           -G${CMAKE_GENERATOR})
+# Option: STRICT_GSL_CHECKS
+# AUDIT: Enable all checks, including gsl_ExpectsAudit() and gsl_EnsuresAudit()
+# ON: Enable all checks, excluding gsl_ExpectsAudit() and gsl_EnsuresAudit() (GSL default)
+# DEBUG_ONLY: Like ON in the Debug configuration, OFF in others (MiNiFi C++ default)
+# OFF: Throw on contract checking and assertion failures instead of calling std::terminate()
+set(STRICT_GSL_CHECKS "DEBUG_ONLY" CACHE STRING "Contract checking and assertion failures call terminate")
+list(APPEND STRICT_GSL_CHECKS_Values AUDIT ON DEBUG_ONLY OFF)
+set_property(CACHE STRICT_GSL_CHECKS PROPERTY STRINGS ${STRICT_GSL_CHECKS_Values})
 
 # Use ccache if present
 find_program(CCACHE_FOUND ccache)
@@ -131,7 +89,16 @@ if(CCACHE_FOUND)
     message("-- Found ccache: ${CCACHE_FOUND}")
 endif(CCACHE_FOUND)
 
-# check for exec info before we enable the backtrace features.
+# Use gold linker if instructed
+if (UNIX AND USE_GOLD_LINKER AND NOT APPLE )
+  execute_process(COMMAND ${CMAKE_C_COMPILER} -fuse-ld=gold -Wl,--version ERROR_QUIET OUTPUT_VARIABLE ld_version)
+  if ("${ld_version}" MATCHES "GNU gold")
+    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -fuse-ld=gold -Wl,--disable-new-dtags")
+    set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -fuse-ld=gold -Wl,--disable-new-dtags")
+  endif()
+endif()
+
+# Check for exec info before we enable the backtrace features.
 CHECK_INCLUDE_FILE("execinfo.h" HAS_EXECINFO)
 if (ENABLE_OPS AND HAS_EXECINFO AND NOT WIN32)
   add_definitions("-DHAS_EXECINFO=1")
@@ -142,6 +109,8 @@ endif()
 include(CheckCXXCompilerFlag)
 if (WIN32)
 	add_definitions(-DWIN32_LEAN_AND_MEAN)
+	add_definitions(-D_CRT_SECURE_NO_WARNINGS)
+	add_compile_options("/W1")
   if ((MSVC_VERSION GREATER "1900") OR (MSVC_VERSION EQUAL "1900"))
     CHECK_CXX_COMPILER_FLAG("/std:c++14" _cpp_latest_flag_supported)
     if (_cpp_latest_flag_supported)
@@ -161,348 +130,255 @@ endif()
 
 endif()
 
+if (WIN32)
+	add_definitions(-DSERVICE_NAME="Apache NiFi MINiFi")
+endif()
+
 #set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall")
 
 if (NOT PORTABLE)
-  if(MSVC)
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /arch:AVX2")
-  else()
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -march=native")
-  endif()
+	if(MSVC)
+		set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} /arch:AVX2")
+		set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /arch:AVX2")
+	else()
+		set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -march=native")
+		set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -march=native")
+	endif()
 endif()
 
 set(CMAKE_CXX_STANDARD 11)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# Search for threads
+# thread library - we must find this before we set ASAN flags, otherwise FindThreads.cmake sometimes thinks we don't
+# need to link with libpthread because libasan already provides some overridden pthread_* symbols.
+set(CMAKE_THREAD_PREFER_PTHREAD TRUE)
+set(THREADS_PREFER_PTHREAD_FLAG TRUE)
 find_package(Threads REQUIRED)
+message("CMAKE_THREAD_LIBS_INIT is ${CMAKE_THREAD_LIBS_INIT}")
+message("THREADS_HAVE_PTHREAD_ARG is ${THREADS_HAVE_PTHREAD_ARG}")
 
+# We want everything PIC. Even though it isn't needed for the executables itself (that use libminifi.a), it is needed
+# to create libminifi.so, and it will enable us to use the same set of compiled libminifi sources for both.
+# It has the added benefit of having PIE executables that supports using Address space layout randomization,
+# an important security feature.
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+
+# Use ASAN if instructed
+if (ASAN_BUILD)
+	set(ASAN_FLAGS "-g -fsanitize=address -fsanitize-address-use-after-scope -fno-omit-frame-pointer")
+	set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${ASAN_FLAGS}")
+	set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${ASAN_FLAGS}")
+	set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} ${ASAN_FLAGS}")
+	set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} ${ASAN_FLAGS}")
+endif()
+
+#### Third party dependencies ####
+
+# Define function for passing dependencies
+function(append_third_party_passthrough_args OUTPUT EXTERNALPROJECT_CMAKE_ARGS)
+	string(REPLACE ";" "%" CMAKE_MODULE_PATH_PASSTHROUGH "${CMAKE_MODULE_PATH}")
+	list(APPEND EXTERNALPROJECT_CMAKE_ARGS "-DCMAKE_MODULE_PATH=${CMAKE_MODULE_PATH_PASSTHROUGH}")
+	list(APPEND EXTERNALPROJECT_CMAKE_ARGS ${PASSTHROUGH_VARIABLES})
+	set(${OUTPUT} ${EXTERNALPROJECT_CMAKE_ARGS} PARENT_SCOPE)
+endfunction()
+
+# Find patch executable
+find_package(Patch REQUIRED)
+
+# Setup passthrough args
+set(PASSTHROUGH_CMAKE_ARGS -DANDROID_ABI=${ANDROID_ABI}
+		-DANDROID_PLATFORM=${ANDROID_PLATFORM}
+		-DANDROID_STL=${ANDROID_STL}
+		-DCMAKE_LIBRARY_OUTPUT_DIRECTORY=${CMAKE_LIBRARY_OUTPUT_DIRECTORY}
+		-DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}
+		-DANDROID_NDK=${ANDROID_NDK}
+		-DCMAKE_POSITION_INDEPENDENT_CODE=${CMAKE_POSITION_INDEPENDENT_CODE}
+		-DCMAKE_C_FLAGS=${CMAKE_C_FLAGS}
+		-DCMAKE_CXX_FLAGS=${CMAKE_CXX_FLAGS}
+		-DCMAKE_TOOLCHAIN_FILE=${CMAKE_TOOLCHAIN_FILE}
+		-DCMAKE_MAKE_PROGRAM=${CMAKE_MAKE_PROGRAM}
+		-DCMAKE_C_COMPILER=${CMAKE_C_COMPILER}
+		-DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}
+		-DCMAKE_EXE_LINKER_FLAGS=${CMAKE_EXE_LINKER_FLAGS}
+		-DCMAKE_SHARED_LINKER_FLAGS=${CMAKE_SHARED_LINKER_FLAGS}
+		-DCMAKE_FIND_ROOT_PATH=${CMAKE_FIND_ROOT_PATH}
+		-DCMAKE_FIND_ROOT_PATH_MODE_PROGRAM=${CMAKE_FIND_ROOT_PATH_MODE_PROGRAM}
+		-DCMAKE_FIND_ROOT_PATH_MODE_LIBRARY=${CMAKE_FIND_ROOT_PATH_MODE_LIBRARY}
+		-DCMAKE_FIND_ROOT_PATH_MODE_INCLUDE=${CMAKE_FIND_ROOT_PATH_MODE_INCLUDE}
+		-DCMAKE_INSTALL_PREFIX=${CMAKE_INSTALL_PREFIX}
+		-G${CMAKE_GENERATOR}
+		)
+
+# jemalloc
+if(NOT WIN32)
+	if (ENABLE_JNI)
+		if (NOT DISABLE_JEMALLOC)
+			include(BundledJemalloc)
+			use_bundled_jemalloc(${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR})
+			message("jemalloc found at ${JEMALLOC_LIBRARIES}")
+		endif()
+		set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DENABLE_JNI")
+		set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -DENABLE_JNI")
+	endif()
+endif()
+
+# Simple-Windows-Posix-Semaphore
 if (WIN32)
   	add_subdirectory("thirdparty/Simple-Windows-Posix-Semaphore")
 endif()
 
-# Provide custom modules for the project
-list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
+# ossp-uuid
+if(NOT WIN32)
+	include(BundledOSSPUUID)
+	use_bundled_osspuuid(${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR})
+endif()
 
+# OpenSSL/LibreSSL
 if (NOT OPENSSL_OFF)
-	if(USE_SYSTEM_OPENSSL)
-		
-		# Set the right openssl root path
-		if (${CMAKE_SYSTEM_NAME} MATCHES "Darwin")
-		set(OPENSSL_ROOT_DIR "/usr/local/opt/openssl/")
-		elseif(NOT WIN32)
-		set(OPENSSL_ROOT_DIR "/usr/lib/x86_64-linux-gnu")
-		else()
-			#set(OPENSSL_ROOT_DIR "/usr/lib/x86_64-linux-gnu")
-		endif()
-	
-		# Include OpenSSL
-		find_package (OpenSSL REQUIRED)
-	
-	else()
-		message("Using bundled LibreSSL")
-		set(BUILD_ARGS "")
-		if (WIN32)
-		set(BUILD_ARGS " -GVisual Studio 15 2017")
-		endif(WIN32)
-		ExternalProject_Add(
-		libressl-portable
-		GIT_REPOSITORY "https://github.com/libressl-portable/portable.git"
-		GIT_TAG "v2.8.3"
-		SOURCE_DIR "${CMAKE_CURRENT_BINARY_DIR}/thirdparty/libressl-src"
-		CMAKE_ARGS ${PASSTHROUGH_CMAKE_ARGS}
-					"-DCMAKE_INSTALL_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/thirdparty/libressl-install"
-					"-DLIBRESSL_APPS=OFF"
-					"-DLIBRESSL_TESTS=OFF"
-					"${BUILD_ARGS}"
-		PATCH_COMMAND ./autogen.sh
-		)
-	
-		list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake/ssl")
-		add_library(crypto STATIC IMPORTED)
-		set_target_properties(crypto PROPERTIES IMPORTED_LOCATION "${CMAKE_CURRENT_BINARY_DIR}/thirdparty/libressl-install/lib/libcrypto.a")
-		add_dependencies(crypto libressl-portable)
-						
-		add_library(ssl STATIC IMPORTED)
-		set_target_properties(ssl PROPERTIES IMPORTED_LOCATION "${CMAKE_CURRENT_BINARY_DIR}/thirdparty/libressl-install/lib/libssl.a")
-		set_target_properties(ssl PROPERTIES INTERFACE_LINK_LIBRARIES crypto)
-		add_dependencies(ssl libressl-portable)
-		
-		add_library(tls STATIC IMPORTED)
-		set_target_properties(tls PROPERTIES IMPORTED_LOCATION "${CMAKE_CURRENT_BINARY_DIR}/thirdparty/libressl-install/lib/libtls.a")
-		set_target_properties(tls PROPERTIES INTERFACE_LINK_LIBRARIES crypto)
-		add_dependencies(tls libressl-portable)
-		
-		set(LIBRESSL_SRC_DIR "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/libressl/" CACHE STRING "" FORCE)
-		set(LIBRESSL_BIN_DIR "${CMAKE_CURRENT_BINARY_DIR}/thirdparty/libressl-install/" CACHE STRING "" FORCE)
-	
-		set(OPENSSL_FOUND "YES" CACHE STRING "" FORCE)
-		set(OPENSSL_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/libressl/include" CACHE STRING "" FORCE)
-		set(OPENSSL_LIBRARIES "${CMAKE_CURRENT_BINARY_DIR}/thirdparty/libressl-install/lib/libtls.a" "${CMAKE_CURRENT_BINARY_DIR}/thirdparty/libressl-install/lib/libssl.a" "${CMAKE_CURRENT_BINARY_DIR}/thirdparty/libressl-install/lib/libcrypto.a" CACHE STRING "" FORCE)
-	endif()
-if (OPENSSL_FOUND)
-  include_directories(${OPENSSL_INCLUDE_DIR})
-  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DOPENSSL_SUPPORT")
-  set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -DOPENSSL_SUPPORT")
-  MESSAGE("OpenSSL found at ${OPENSSL_LIBRARIES}")
-else ()
-  message( FATAL_ERROR "OpenSSL was not found. Please install OpenSSL" )
-endif (OPENSSL_FOUND)
+	include(BundledLibreSSL)
+	use_libre_ssl("${CMAKE_CURRENT_SOURCE_DIR}" "${CMAKE_CURRENT_BINARY_DIR}")
+	list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake/ssl")
+
+	set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DOPENSSL_SUPPORT")
+	set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -DOPENSSL_SUPPORT")
+endif()
+
+# zlib
+include(BundledZLIB)
+use_bundled_zlib(${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR})
+list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake/zlib/dummy")
+
+# uthash
+add_library(ut INTERFACE)
+target_include_directories(ut INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/ut")
+
+# cURL
+if(NOT DISABLE_CURL)
+	include(BundledLibcURL)
+	use_bundled_curl(${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR})
+	list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake/curl/dummy")
 else()
-	list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake/winssl")
-endif()
-if(WIN32 OR NOT USE_SYSTEM_ZLIB)
-  message("Using bundled zlib")
-
-  if (WIN32)
-  if (CMAKE_BUILD_TYPE MATCHES RelWithDebInfo OR CMAKE_BUILD_TYPE MATCHES Release)
-  set(BYPRODUCT "thirdparty/zlib-install/lib/zlibstatic.lib")
-  else()
-  set(BYPRODUCT "thirdparty/zlib-install/lib/zlibstaticd.lib")
-  endif()
-  else()
-  set(BYPRODUCT "thirdparty/zlib-install/lib/libz.a")
-  endif()
-  ExternalProject_Add(
-    zlib-external
-    GIT_REPOSITORY "https://github.com/madler/zlib.git"
-    GIT_TAG "cacf7f1d4e3d44d871b605da3b647f07d718623f"  # Version 1.2.11
-    SOURCE_DIR "${CMAKE_CURRENT_BINARY_DIR}/thirdparty/zlib-src"
-    CMAKE_ARGS ${PASSTHROUGH_CMAKE_ARGS}
-               "-DCMAKE_INSTALL_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/thirdparty/zlib-install"
-    BUILD_BYPRODUCTS ${BYPRODUCT}
-  )
-
-  
-  add_library(z STATIC IMPORTED)
-  set_target_properties(z PROPERTIES IMPORTED_LOCATION "${CMAKE_CURRENT_BINARY_DIR}/${BYPRODUCT}")
-  
-  set(ZLIB_BYPRODUCT "${CMAKE_CURRENT_BINARY_DIR}/${BYPRODUCT}" CACHE STRING "" FORCE)
-  set(ZLIB_BYPRODUCT_INCLUDE "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/zlib/include" CACHE STRING "" FORCE)  
-  set(ZLIB_BIN_DIR "${CMAKE_CURRENT_BINARY_DIR}/thirdparty/libressl-install/" CACHE STRING "" FORCE)
-  
-  add_dependencies(z zlib-external)
-  set(ZLIB_FOUND "YES" CACHE STRING "" FORCE)
-  set(ZLIB_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/zlib/include" CACHE STRING "" FORCE)
-  set(ZLIB_INCLUDE_DIRS "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/zlib/include" CACHE STRING "" FORCE)
-  
-  set(ZLIB_LIBRARY "${CMAKE_CURRENT_BINARY_DIR}/${BYPRODUCT}" CACHE STRING "" FORCE)
-  set(ZLIB_LIBRARIES "${ZLIB_LIBRARY}" CACHE STRING "" FORCE)
-  set(ZLIB_LIBRARY_RELEASE "${CMAKE_CURRENT_BINARY_DIR}/${BYPRODUCT}" CACHE STRING "" FORCE)
-  set(ZLIB_LIBRARY_DEBUG "${CMAKE_CURRENT_BINARY_DIR}/${BYPRODUCT}" CACHE STRING "" FORCE)
-
-  list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake/zlib/dummy")
-else()
-  find_package (ZLIB REQUIRED)
+	set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DDISABLE_CURL")
+	set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -DDISABLE_CURL")
 endif()
 
-if (ZLIB_FOUND)
-  include_directories(${ZLIB_INCLUDE_DIRS})
+# spdlog
+add_library(spdlog INTERFACE)
+target_include_directories(spdlog INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/spdlog-20170710/include")
+if (NOT WIN32)
+	set_property(TARGET spdlog APPEND PROPERTY INTERFACE_COMPILE_DEFINITIONS "SPDLOG_ENABLE_SYSLOG")
 endif()
 
+# yaml-cpp
+include(BundledYamlCpp)
+use_bundled_yamlcpp(${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR})
+
+# concurrentqueue
+add_library(concurrentqueue INTERFACE)
+target_include_directories(concurrentqueue INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/concurrentqueue")
+
+# RapidJSON
+add_library(RapidJSON INTERFACE)
+target_include_directories(RapidJSON INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/rapidjson-1.1.0/include")
+
+# Cron
+add_library(cron INTERFACE)
+target_include_directories(cron INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/cron")
+
+# cxxopts
+add_library(cxxopts INTERFACE)
+target_include_directories(cxxopts INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/cxxopts/include")
+
+# gsl-lite
+add_library(gsl-lite INTERFACE)
+target_include_directories(gsl-lite INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/gsl-lite-0.37.0/include")
+
+# Add necessary definitions based on the value of STRICT_GSL_CHECKS, see gsl-lite README for more details
+list(APPEND GslDefinitions gsl_CONFIG_DEFAULTS_VERSION=1)
+list(APPEND GslDefinitionsNonStrict gsl_CONFIG_CONTRACT_VIOLATION_THROWS gsl_CONFIG_NARROW_THROWS_ON_TRUNCATION=1)
+if (STRICT_GSL_CHECKS STREQUAL "AUDIT")
+	list(APPEND GslDefinitions gsl_CONFIG_CONTRACT_CHECKING_AUDIT)
+endif()
+if (NOT STRICT_GSL_CHECKS)  # OFF (or any other falsey string) matches, AUDIT/ON/DEBUG_ONLY don't match
+	list(APPEND GslDefinitions ${GslDefinitionsNonStrict})
+endif()
+if (STRICT_GSL_CHECKS STREQUAL "DEBUG_ONLY")
+	list(APPEND GslDefinitions $<$<NOT:$<CONFIG:Debug>>:${GslDefinitionsNonStrict}>)
+endif()
+target_compile_definitions(gsl-lite INTERFACE ${GslDefinitions})
+
+# optional-lite
+add_library(optional-lite INTERFACE)
+target_include_directories(optional-lite INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/optional-lite-3.2.0/include")
+
+#### Extensions ####
 SET(TEST_DIR ${CMAKE_SOURCE_DIR}/libminifi/test)
-
 include(Extensions)
 
-list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake/uuid/dummy")
-if (WIN32)
-	include_directories("thirdparty/uuid/include/win32/")
-else()
-	include_directories("thirdparty/uuid/include/posix")
-endif()
-add_subdirectory("thirdparty/uuid")
-include_directories(thirdparty/ut)
-set(UUID_FOUND "YES" CACHE STRING "" FORCE)
-set(UUID_LIBRARIES "uuid" CACHE STRING "" FORCE)
-
-
-if (DISABLE_CURL)
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DDISABLE_CURL")
-	set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -DDISABLE_CURL")
-endif(DISABLE_CURL)
-if(NOT DISABLE_CURL AND (NOT USE_SYSTEM_CURL))
-  message("Using bundled cURL")
-  
-  set(CURL_C_FLAGS "-I${OPENSSL_INCLUDE_DIR}")
-  set(CURL_CXX_FLAGS "${CURL_C_FLAGS}")
-
-
-get_property(LIB64 GLOBAL PROPERTY FIND_LIBRARY_USE_LIB64_PATHS)
-
-if ("${LIB64}" STREQUAL "TRUE" AND (NOT WIN32 AND NOT APPLE))
-    set(LIBSUFFIX 64)
-else()
-    set(LIBSUFFIX "")
-endif()
-
-  if (WIN32)
- if (CMAKE_BUILD_TYPE MATCHES RelWithDebInfo OR CMAKE_BUILD_TYPE MATCHES Release)
-  set(BYPRODUCT "thirdparty/curl-install/lib/libcurl.lib")
-  else()
-  set(BYPRODUCT "thirdparty/curl-install/lib/libcurl-d.lib")
-  endif()
-  else()
-  set(BYPRODUCT "thirdparty/curl-install/lib${LIBSUFFIX}/libcurl.a")
-  endif()
-
-  if (WIN32)
-  set (PC "PATCH_COMMAND ./buildconf.bat")
-  else()
-  endif()
-
-  ExternalProject_Add(
-    curl-external
-    GIT_REPOSITORY "https://github.com/curl/curl.git"
-    GIT_TAG "f3294d9d86e6a7915a967efff2842089b8b0d071"  # Version 7.64.0
-    SOURCE_DIR "${CMAKE_CURRENT_BINARY_DIR}/thirdparty/curl-src"
-    CMAKE_ARGS ${PASSTHROUGH_CMAKE_ARGS}
-               "-DCMAKE_INSTALL_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/thirdparty/curl-install"
-                -DBUILD_CURL_EXE=OFF
-                -DBUILD_TESTING=OFF
-                -DBUILD_SHARED_LIBS=OFF
-                -DHTTP_ONLY=ON
-                -DLIBRESSL_BIN_DIR=${LIBRESSL_BIN_DIR}
-                -DLIBRESSL_SRC_DIR=${LIBRESSL_SRC_DIR}
-                -DCURL_DISABLE_CRYPTO_AUTH=ON
-                -DHAVE_GLIBC_STRERROR_R=1
-                -DHAVE_GLIBC_STRERROR_R__TRYRUN_OUTPUT=""
-                -DHAVE_POSIX_STRERROR_R=0
-                -DHAVE_POSIX_STRERROR_R__TRYRUN_OUTPUT=""
-                -DHAVE_POLL_FINE_EXITCODE=0
-                -DHAVE_FSETXATTR_5=0
-                -DHAVE_FSETXATTR_5__TRYRUN_OUTPUT=""
-               "-DCMAKE_MODULE_PATH=${CMAKE_CURRENT_SOURCE_DIR}/cmake/ssl"
-               "-DCMAKE_C_FLAGS=${CURL_C_FLAGS}"
-               "-DCMAKE_CXX_FLAGS=${CURL_CXX_FLAGS}"
-	${PC}
-    BUILD_BYPRODUCTS "thirdparty/${BYPRODUCT}"
-  )
-
-  if(NOT USE_SYSTEM_OPENSSL OR USE_SYSTEM_OPENSSL STREQUAL "OFF")
-    add_dependencies(curl-external libressl-portable)
-  endif()
-
-  list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake/curl/dummy")
-  add_library(curl STATIC IMPORTED)
-  set_target_properties(curl PROPERTIES IMPORTED_LOCATION "${CMAKE_CURRENT_BINARY_DIR}/${BYPRODUCT}")
-  
-  
-  if (OPENSSL_FOUND) 
-     if (NOT WIN32)
-       set_target_properties(curl PROPERTIES INTERFACE_LINK_LIBRARIES ${OPENSSL_LIBRARIES})
-	 endif()
-  endif(OPENSSL_FOUND)
-  add_dependencies(curl curl-external)
-  set(CURL_FOUND "YES")
-  set(CURL_INCLUDE_DIRS "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/curl/include")
-  set(CURL_LIBRARY "${CMAKE_CURRENT_BINARY_DIR}/${BYPRODUCT}" CACHE STRING "" FORCE)
-  set(CURL_LIBRARIES ${CURL_LIBRARY} CACHE STRING "" FORCE)
- else()
-  message("Using System cURL")
-endif()
-
-if (CURL_FOUND)
-  include_directories("${CURL_INCLUDE_DIRS}")
-endif()
-
-file(GLOB SPD_SOURCES "thirdparty/spdlog-20170710/include/spdlog/*")
-
-include(ExternalProject)
-
-set(CIVETWEB_ENABLE_SSL_DYNAMIC_LOADING OFF CACHE BOOL "Disable dynamic SSL library loading")
-set(CIVETWEB_ENABLE_CXX ON CACHE BOOL "Enable civet C++ library")
-set(CIVETWEB_ENABLE_SSL OFF CACHE BOOL "DISABLE SSL")
-
-SET(WITH_TOOLS OFF CACHE BOOL "Do not build RocksDB tools")
-if ( NOT APPLE)
-if (ENABLE_PYTHON)
-  SET(BUILD_SHARED_LIBS ON CACHE BOOL "Build yaml cpp shared lib" FORCE)
-else()
-  SET(BUILD_SHARED_LIBS OFF CACHE BOOL "Build yaml cpp shared lib" FORCE)
-endif()
-endif()
-SET(WITH_TESTS OFF CACHE BOOL "Build RocksDB library (not repo) tests")
-set(CIVET_THIRDPARTY_ROOT "${CMAKE_SOURCE_DIR}/thirdparty/civetweb-1.10/" CACHE STRING "Path to CivetWeb root")
-set(CIVET_BINARY_ROOT "${CMAKE_BINARY_DIR}/thirdparty/civetweb-1.10/" CACHE STRING "Path to CivetWeb binary output")
-set(ROCKSDB_THIRDPARTY_ROOT "${CMAKE_SOURCE_DIR}/thirdparty/rocksdb/" CACHE STRING "Path to RocksDB root")
-add_subdirectory(thirdparty/yaml-cpp-yaml-cpp-20171024)
-
-include_directories(thirdparty/concurrentqueue)
-include_directories(thirdparty/yaml-cpp-yaml-cpp-20171024/include)
-include_directories(thirdparty/rapidjson-1.1.0/include)
-
-## Expression language extensions
-option(DISABLE_EXPRESSION_LANGUAGE "Disables the scripting extensions." OFF)
-include_directories("extensions/expression-language/common")
-if (DISABLE_EXPRESSION_LANGUAGE)
-    # Build expression language NoOp implementation, if necessary
-    include_directories("extensions/expression-language/noop")
-    add_subdirectory(extensions/expression-language/noop)
-else()
-    include_directories("extensions/expression-language/impl")
-    createExtension(EXPRESSION-LANGUAGE-EXTENSIONS "EXPRESSION LANGUAGE EXTENSIONS" "This enables NiFi expression language" "extensions/expression-language" "${TEST_DIR}/expression-language-tests")
-    if(NOT USE_SYSTEM_CURL)
-		message("minifi-expression-language-extensions will depend on curl-external")
-		add_dependencies(minifi-expression-language-extensions curl-external)
-	endif()
-endif()
-
 if(BOOTSTRAP)
-    add_subdirectory(thirdparty/cxxopts)
-    createExtension(BOOTSTRAP "BOOTSTRAP" "Bootstraps documentation and other features" "extensions/bootstrap")
-    # we don't currently need this route. A follow on should help re-write processor documentation from what exists in code, so this will remain here 
-	# execute_process(COMMAND ${CMAKE_BINARY_DIR}/extensions/bootstrap/bstrp --inputc2docs "${CMAKE_SOURCE_DIR}/PROCESSORS.md" --outputc2docs "${CMAKE_SOURCE_DIR}/libminifi/include/agent/agent_docs.h")
-    return()
+	# display an error message for those using the bootstrap
+    message(FATAL_ERROR "Bootstrapping is no longer needed within the agent")
 endif()
 
-execute_process(COMMAND ${CMAKE_COMMAND} -G "${CMAKE_GENERATOR}"
-                        -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}
-                        -DCMAKE_MAKE_PROGRAM=${CMAKE_MAKE_PROGRAM}
-                        -DBOOTSTRAP=ON
-                        ${CMAKE_SOURCE_DIR}
-               WORKING_DIRECTORY "${workdir}")
-               
 add_subdirectory(libminifi)
 
-if(NOT USE_SYSTEM_OPENSSL OR USE_SYSTEM_OPENSSL STREQUAL "OFF")
-  add_dependencies(minifi libressl-portable)
-endif()
+createExtension(STANDARD-PROCESSORS "STANDARD PROCESSORS" "Provides standard processors" "extensions/standard-processors" "extensions/standard-processors/tests/")
 
-if (WIN32 OR NOT USE_SYSTEM_ZLIB)
-	add_dependencies(minifi zlib-external)
-endif(WIN32 OR NOT USE_SYSTEM_ZLIB)
-
-#### EXTENSIONS
 if ((DISABLE_CURL STREQUAL "OFF" OR NOT DISABLE_CURL) AND NOT DISABLE_CIVET)
 	createExtension(HTTP-CURL "HTTP CURL" "This enables RESTProtocol, InvokeHTTP, and the HTTPClient for Site to Site" "extensions/http-curl" "extensions/http-curl/tests/")
-	if(NOT USE_SYSTEM_CURL)
-		message("minifi-http-curl will depend on curl-external")
-		add_dependencies(minifi-http-curl curl-external)
-	endif()
+	message("minifi-http-curl will depend on curl-external")
+endif()
+
+option(DISABLE_EXPRESSION_LANGUAGE "Disables the scripting extensions." OFF)
+if (NOT DISABLE_EXPRESSION_LANGUAGE)
+    createExtension(EXPRESSION-LANGUAGE-EXTENSIONS "EXPRESSION LANGUAGE EXTENSIONS" "This enables NiFi expression language" "extensions/expression-language" "extensions/expression-language/tests")
+
+	message("minifi-expression-language-extensions will depend on curl-external")
 endif()
 
 option(DISABLE_CIVET "Disables CivetWeb components." OFF)
 if (NOT DISABLE_CIVET)
-	createExtension(CIVETWEB CIVETWEB "This enables ListenHTTP" "extensions/civetweb" "${TEST_DIR}/civetweb-tests")
+	include(BundledCivetWeb)
+	use_bundled_civetweb(${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR})
+	list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake/civetweb/dummy")
+
+	createExtension(CIVETWEB CIVETWEB "This enables ListenHTTP" "extensions/civetweb" "extensions/civetweb/tests")
 endif()
 
 ## Add the rocks DB extension
-if (NOT ROCKSDB_FOUND OR BUILD_ROCKSDB)
-	set(BUILD_RD "TRUE")
-endif()
-
 option(DISABLE_ROCKSDB "Disables the RocksDB extension." OFF)
-if (DISABLE_ROCKSDB STREQUAL "OFF" OR NOT DISABLE_ROCKSDB)
-	createExtension(ROCKSDB-REPOS "ROCKSDB REPOS" "This Enables persistent provenance, flowfile, and content repositories using RocksDB" "extensions/rocksdb-repos" "${TEST_DIR}/rocksdb-tests" BUILD_RD "${ROCKSDB_THIRDPARTY_ROOT}")
+if (NOT DISABLE_ROCKSDB)
+	if (BUILD_ROCKSDB)
+		include(BundledRocksDB)
+		use_bundled_rocksdb(${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR})
+	else()
+		list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake/rocksdb/sys")
+		find_package(RocksDB REQUIRED)
+	endif()
+	createExtension(ROCKSDB-REPOS "ROCKSDB REPOS" "This Enables persistent provenance, flowfile, and content repositories using RocksDB" "extensions/rocksdb-repos" "${TEST_DIR}/rocksdb-tests")
 endif()
 
 ## Create LibArchive Extension
-if (NOT LibArchive_FOUND OR BUILD_LIBARCHIVE)
-	set(BUILD_TP "TRUE")
-endif()
 option(DISABLE_LIBARCHIVE "Disables the lib archive extensions." OFF)
+option(DISABLE_LZMA "Disables the liblzma build" OFF)
+option(DISABLE_BZIP2 "Disables the bzip2 build" OFF)
 if (NOT DISABLE_LIBARCHIVE)
-	createExtension(ARCHIVE-EXTENSIONS "ARCHIVE EXTENSIONS" "This Enables libarchive functionality including MergeContent, CompressContent, (Un)FocusArchiveEntry and ManipulateArchive." "extensions/libarchive" "${TEST_DIR}/archive-tests" BUILD_TP "thirdparty/libarchive-3.3.2")
+	if (NOT DISABLE_LZMA)
+		include(BundledLibLZMA)
+		use_bundled_liblzma(${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR})
+		list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake/liblzma/dummy")
+	endif()
+
+	if (NOT DISABLE_BZIP2)
+		include(BundledBZip2)
+		use_bundled_bzip2(${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR})
+		list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake/bzip2/dummy")
+	endif()
+
+	include(BundledLibArchive)
+	use_bundled_libarchive(${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR})
+
+	createExtension(ARCHIVE-EXTENSIONS "ARCHIVE EXTENSIONS" "This Enables libarchive functionality including MergeContent, CompressContent, (Un)FocusArchiveEntry and ManipulateArchive." "extensions/libarchive" "${TEST_DIR}/archive-tests")
 endif()
 
 option(ENABLE_GPS "Enables the GPS extension." OFF)
@@ -512,6 +388,8 @@ endif()
 
 option(ENABLE_COAP "Enables the CoAP extension." OFF)
 if (ENABLE_ALL OR ENABLE_COAP STREQUAL "ON")
+	include(BundledLibCoAP)
+	use_bundled_libcoap(${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR})
 	createExtension(COAP-EXTENSION "COAP EXTENSIONS" "Enables LibCOAP Functionality." "extensions/coap" "extensions/coap/tests/")
 	if( NOT DISABLE_CURL)
 		add_dependencies(minifi-coap minifi-http-curl)
@@ -519,23 +397,33 @@ if (ENABLE_ALL OR ENABLE_COAP STREQUAL "ON")
 endif()
 
 if (WIN32)
-option(ENABLE_WEL "Enables the suite of Windows Event Log extensions." OFF)
-if (ENABLE_ALL OR ENABLE_WEL)
-	createExtension(WEL-EXTENSION "WEL EXTENSIONS" "Enables the suite of Windows Event Log extensions." "extensions/windows-event-log" "${TEST_DIR}/windows-event-log-tests")
-endif()
+	option(ENABLE_WEL "Enables the suite of Windows Event Log extensions." OFF)
+	if (ENABLE_ALL OR ENABLE_WEL)
+		include(BundledPugiXml)
+		use_bundled_pugixml(${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR})
+		createExtension(WEL-EXTENSION "WEL EXTENSIONS" "Enables the suite of Windows Event Log extensions." "extensions/windows-event-log" "extensions/windows-event-log/tests")
+	endif()
 endif(WIN32)
+
+option(ENABLE_SQL "Enables the SQL Suite of Tools." OFF)
+if (ENABLE_ALL OR ENABLE_SQL)
+	createExtension(SQL-EXTENSIONS "SQL EXTENSIONS" "Enables the SQL Suite of Tools" "extensions/sql")
+endif()
 
 ## Create MQTT Extension
 option(ENABLE_MQTT "Enables the mqtt extension." OFF)
 if(ENABLE_ALL OR ENABLE_MQTT)
-        createExtension(MQTT-EXTENSIONS "MQTT EXTENSIONS" "This Enables MQTT functionality including PublishMQTT/ConsumeMQTT" "extensions/mqtt" "${TEST_DIR}/mqtt-tests" "TRUE" "thirdparty/paho.mqtt.c")
+		include(BundledPahoMqttC)
+		use_bundled_pahomqttc(${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR})
+        createExtension(MQTT-EXTENSIONS "MQTT EXTENSIONS" "This Enables MQTT functionality including PublishMQTT/ConsumeMQTT" "extensions/mqtt" "${TEST_DIR}/mqtt-tests")
 endif()
 
+# Create JNI Extension
 if(ENABLE_ALL OR ENABLE_JNI)
 	createExtension(JNI-EXTENSION "JNI EXTENSIONS" "Enables JNI capabilities to support loading Java Classes." "extensions/jni" "${TEST_DIR}/jni-tests")
 endif()
 
-
+# Create PCAP Extension
 option(ENABLE_PCAP "Enables the PCAP extension." OFF)
 if(ENABLE_ALL OR ENABLE_PCAP)
 	createExtension(PCAP-EXTENSION "PCAP EXTENSIONS" "Enables libPCAP Functionality and the PacketCapture processor." "extensions/pcap" "${TEST_DIR}/pcap-tests")
@@ -544,15 +432,21 @@ endif()
 ## Create LibRdKafka Extension
 option(ENABLE_LIBRDKAFKA "Enables the librdkafka extension." OFF)
 if (ENABLE_ALL OR ENABLE_LIBRDKAFKA)
-	createExtension(RDKAFKA-EXTENSIONS "RDKAFKA EXTENSIONS" "This Enables librdkafka functionality including PublishKafka" "extensions/librdkafka" "${TEST_DIR}/kafka-tests" "TRUE" "thirdparty/librdkafka-0.11.4")
+	include(BundledLibRdKafka)
+	use_bundled_librdkafka(${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR})
+	createExtension(RDKAFKA-EXTENSIONS "RDKAFKA EXTENSIONS" "This Enables librdkafka functionality including PublishKafka" "extensions/librdkafka" "extensions/librdkafka/tests")
 endif()
 
 ## Scripting extensions
 option(DISABLE_SCRIPTING "Disables the scripting extensions." OFF)
 if (NOT DISABLE_SCRIPTING)
+	# sol
+	add_library(sol INTERFACE)
+	target_include_directories(sol INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/sol2-2.20.0")
     createExtension(SCRIPTING-EXTENSIONS "SCRIPTING EXTENSIONS" "This enables scripting" "extensions/script" "${TEST_DIR}/script-tests")
 endif()
 
+# Sensors extensions
 option(ENABLE_SENSORS "Enables the Sensors package." OFF)
 if(ENABLE_ALL OR ENABLE_SENSORS)
 	add_subdirectory(thirdparty/RTIMULib/RTIMULib)
@@ -562,14 +456,22 @@ endif()
 
 ## SQLite extensions
 option(ENABLE_SQLITE "Disables the scripting extensions." OFF)
-if (ENABLE_ALL OR ENABLE_SQLITE)
-    createExtension(SQLITE-EXTENSIONS "SQLITE EXTENSIONS" "This enables sqlite" "extensions/sqlite" "${TEST_DIR}/sqlite-tests" "TRUE" "thirdparty/sqlite")
+if (ENABLE_SQLITE)
+	include(BundledSQLite)
+	use_bundled_sqlite(${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR})
+    createExtension(SQLITE-EXTENSIONS "SQLITE EXTENSIONS" "This enables sqlite" "extensions/sqlite" "${TEST_DIR}/sqlite-tests")
+endif()
+
+if (ENABLE_SQL AND ENABLE_SQLITE)
+	message(FATAL_ERROR "ENABLE_SQL and ENABLE_SQLITE are incompatible. Set only one at a time.")
 endif()
 
 ## USB camera extensions
 option(ENABLE_USB_CAMERA "Enables USB camera support." OFF)
 if (ENABLE_ALL OR ENABLE_USB_CAMERA)
-    createExtension(USB-CAMERA-EXTENSIONS "USB CAMERA EXTENSIONS" "This enables USB camera support" "extensions/usb-camera" "${TEST_DIR}/usb-camera-tests" "TRUE" "thirdparty/libuvc-0.0.6")
+	include(BundledLibUvc)
+	use_bundled_libuvc(${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR})
+    createExtension(USB-CAMERA-EXTENSIONS "USB CAMERA EXTENSIONS" "This enables USB camera support" "extensions/usb-camera" "${TEST_DIR}/usb-camera-tests")
 endif()
 
 ## TensorFlow extensions
@@ -579,22 +481,71 @@ if (ENABLE_TENSORFLOW)
     createExtension(TENSORFLOW-EXTENSIONS "TENSORFLOW EXTENSIONS" "This enables TensorFlow support" "extensions/tensorflow" "${TEST_DIR}/tensorflow-tests")
 endif()
 
+## AWS Extentions
+option(ENABLE_AWS "Enables AWS support." OFF)
+if (ENABLE_AWS)
+	include(BundledAwsSdkCpp)
+	use_bundled_libaws(${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR})
+	createExtension(AWS-EXTENSIONS "AWS EXTENSIONS" "This enables AWS support" "extensions/aws")
+endif()
+
+## OpenCV Extesions
+option(ENABLE_OPENCV "Disables the OpenCV extensions." OFF)
+if (ENABLE_OPENCV)
+	createExtension(OPENCV-EXTENSIONS "OPENCV EXTENSIONS" "This enabled OpenCV support" "extensions/opencv" "extensions/opencv/tests")
+endif()
+
 
 ## Bustache/template extensions
 option(ENABLE_BUSTACHE "Enables Bustache (ApplyTemplate) support." OFF)
 if (ENABLE_BUSTACHE)
-    createExtension(BUSTACHE-EXTENSIONS "BUSTACHE EXTENSIONS" "This enables bustache functionality including ApplyTemplate." "extensions/bustache" "${TEST_DIR}/bustache-tests" "TRUE" "thirdparty/bustache")
+	include(BundledBustache)
+	use_bundled_bustache(${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR})
+    createExtension(BUSTACHE-EXTENSIONS "BUSTACHE EXTENSIONS" "This enables bustache functionality including ApplyTemplate." "extensions/bustache" "${TEST_DIR}/bustache-tests")
+endif()
+
+## OPC Extentions
+if (ENABLE_OPC)
+	include(BundledMbedTLS)
+	use_bundled_mbedtls(${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR})
+	list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake/mbedtls/dummy")
+
+	include(BundledOpen62541)
+	use_bundled_open62541(${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR})
+
+	createExtension(OPC-EXTENSIONS "OPC EXTENSIONS" "This enables OPC-UA support" "extensions/opc")
+endif()
+
+## SFTP extensions
+option(ENABLE_SFTP "Enables SFTP support." OFF)
+if ((ENABLE_ALL OR ENABLE_SFTP) AND NOT DISABLE_CURL)
+	include(BundledLibSSH2)
+	use_bundled_libssh2(${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR})
+	list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake/libssh2/dummy")
+
+    createExtension(SFTP "SFTP EXTENSIONS" "This enables SFTP support" "extensions/sftp" "extensions/sftp/tests")
+endif()
+
+## Openwsman Extesions
+option(ENABLE_OPENWSMAN "Enables the Openwsman extensions." OFF)
+if (ENABLE_OPENWSMAN AND NOT DISABLE_CIVET AND NOT DISABLE_CURL)
+	include(BundledLibXml2)
+	use_bundled_libxml2(${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR})
+	list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake/libxml2/dummy")
+
+	include(BundledOpenWSMAN)
+	use_bundled_openwsman(${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR})
+
+    createExtension(OPENWSMAN-EXTENSIONS "OPENWSMAN EXTENSIONS" "This enables Openwsman support" "extensions/openwsman")
 endif()
 
 ## NOW WE CAN ADD LIBRARIES AND EXTENSIONS TO MAIN
-
 add_subdirectory(main)
 add_subdirectory(nanofi)
 
 add_dependencies(nanofi minifiexe)
 
 if (NOT DISABLE_CURL AND NOT DISABLE_CONTROLLER)
-	add_subdirectory(thirdparty/cxxopts)
 	add_subdirectory(controller)
 	add_dependencies(minificontroller minifiexe)
 endif()
@@ -619,89 +570,168 @@ endif()
 message("BUILD_IDENTIFIER is ${BUILD_IDENTIFIER}")
 
 if (WIN32)
-
-# Get the latest abbreviated commit hash of the working branch
-execute_process(
-  COMMAND git log -1 --format=%h
-  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-  OUTPUT_VARIABLE BUILD_REV
-  OUTPUT_STRIP_TRAILING_WHITESPACE
-)
-	execute_process(COMMAND 
-			"${CMAKE_CURRENT_SOURCE_DIR}/generateVersion.bat" 
-			"${PROJECT_VERSION_MAJOR}.${PROJECT_VERSION_MINOR}.${PROJECT_VERSION_PATCH}" 
-			${CMAKE_CURRENT_SOURCE_DIR} 
-			${CMAKE_CURRENT_SOURCE_DIR}/libminifi/include/agent/ 
+	# Get the latest abbreviated commit hash of the working branch
+	execute_process(
+			COMMAND git log -1 --format=%h
+			WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+			OUTPUT_VARIABLE BUILD_REV
+			OUTPUT_STRIP_TRAILING_WHITESPACE)
+	execute_process(COMMAND
+			"${CMAKE_CURRENT_SOURCE_DIR}/generateVersion.bat"
+			"${PROJECT_VERSION_MAJOR}.${PROJECT_VERSION_MINOR}.${PROJECT_VERSION_PATCH}"
+			${CMAKE_CURRENT_SOURCE_DIR}
+			${CMAKE_CURRENT_SOURCE_DIR}/libminifi/include/agent/
 			"${CMAKE_CXX_COMPILER}"
-			"${CMAKE_CXX_COMPILER_VERSION}" 
-			"${CMAKE_CXX_FLAGS}" 
+			"${CMAKE_CXX_COMPILER_VERSION}"
+			"${CMAKE_CXX_FLAGS}"
 			\"${selected_extensions}\"
 			"${BUILD_IDENTIFIER}"
 			"${BUILD_REV}")
 else()
 	execute_process(COMMAND 
-		"${CMAKE_CURRENT_SOURCE_DIR}/generateVersion.sh" 
-		"${PROJECT_VERSION_MAJOR}.${PROJECT_VERSION_MINOR}.${PROJECT_VERSION_PATCH}" 
-		${CMAKE_CURRENT_SOURCE_DIR} 
-		${CMAKE_CURRENT_SOURCE_DIR}/libminifi/include/agent/ 
-		"${CMAKE_CXX_COMPILER}"
-		"${CMAKE_CXX_COMPILER_VERSION}" 
-		"${CMAKE_CXX_FLAGS}" 
-		"${selected_extensions}" 
-		"${BUILD_IDENTIFIER}")
-
+			"${CMAKE_CURRENT_SOURCE_DIR}/generateVersion.sh"
+			"${PROJECT_VERSION_MAJOR}.${PROJECT_VERSION_MINOR}.${PROJECT_VERSION_PATCH}"
+			${CMAKE_CURRENT_SOURCE_DIR}
+			${CMAKE_CURRENT_SOURCE_DIR}/libminifi/include/agent/
+			"${CMAKE_CXX_COMPILER}"
+			"${CMAKE_CXX_COMPILER_VERSION}"
+			"${CMAKE_CXX_FLAGS}"
+			"${selected_extensions}"
+			"${BUILD_IDENTIFIER}")
 endif()
+
 # Generate source assembly
 set(ASSEMBLY_BASE_NAME "${CMAKE_PROJECT_NAME}-${PROJECT_VERSION_MAJOR}.${PROJECT_VERSION_MINOR}.${PROJECT_VERSION_PATCH}")
 if(WIN32)
-set(CPACK_ALL_INSTALL_TYPES Full Developer)
-set(CPACK_COMPONENT_LIBRARIES_INSTALL_TYPES Developer Full)
-set(CPACK_COMPONENT_HEADERS_INSTALL_TYPES Developer Full)
-set(CPACK_COMPONENT_APPLICATIONS_INSTALL_TYPES Full)
-set(CPACK_WIX_TEMPLATE "${CMAKE_CURRENT_SOURCE_DIR}/msi/WixWin64.wsi")
+	set(CPACK_ALL_INSTALL_TYPES Full Developer)
+	set(CPACK_COMPONENT_LIBRARIES_INSTALL_TYPES Developer Full)
+	set(CPACK_COMPONENT_HEADERS_INSTALL_TYPES Developer Full)
+	set(CPACK_COMPONENT_APPLICATIONS_INSTALL_TYPES Full)
+	set(CPACK_WIX_EXTENSIONS WixUtilExtension)
+	set(CPACK_WIX_UI_BANNER "${CMAKE_CURRENT_SOURCE_DIR}/msi/minifi-logo-png-banner.png")
+	set(CPACK_WIX_UI_DIALOG "${CMAKE_CURRENT_SOURCE_DIR}/msi/bgr.png")
+
+	file(COPY "${CMAKE_CURRENT_SOURCE_DIR}/conf/" DESTINATION "${CMAKE_CURRENT_BINARY_DIR}/conf/")
+	file(COPY "${CMAKE_CURRENT_SOURCE_DIR}/LICENSE" DESTINATION "${CMAKE_CURRENT_BINARY_DIR}")
+	file(COPY "${CMAKE_CURRENT_SOURCE_DIR}/README.md" DESTINATION "${CMAKE_CURRENT_BINARY_DIR}")
+	file(COPY "${CMAKE_CURRENT_SOURCE_DIR}/NOTICE" DESTINATION "${CMAKE_CURRENT_BINARY_DIR}")
+
+	# Determine the path of the VC Redistributable Merge Modules
+	if (DEFINED ENV{VCToolsRedistDir})
+		# Just get the redist dir that has been set by the build environment
+		set(VCRUNTIME_REDIST_DIR $ENV{VCToolsRedistDir})
+	else()
+		# Try to fall back to a redist dir relative to the MSVC compiler
+		string(REGEX REPLACE "/VC/Tools/.*" "/VC/Redist/MSVC/" VCRUNTIME_REDIST_BASE_DIR ${CMAKE_C_COMPILER})
+		file(GLOB VCRUNTIME_REDIST_VERSIONS "${VCRUNTIME_REDIST_BASE_DIR}/*")
+		if (NOT VCRUNTIME_REDIST_VERSIONS)
+			message(FATAL_ERROR "Could not find the VC Redistributable Merge Modules. Please set VCRUNTIME_X86_MERGEMODULE_PATH and VCRUNTIME_X64_MERGEMODULE_PATH manually!")
+		endif()
+		# Sort the directories in descending order and take the first one - it should be the latest version
+		list(SORT VCRUNTIME_REDIST_VERSIONS)
+		list(REVERSE VCRUNTIME_REDIST_VERSIONS)
+		list(GET VCRUNTIME_REDIST_VERSIONS 0 VCRUNTIME_REDIST_DIR)
+	endif()
+
+    if (INSTALLER_MERGE_MODULES)
+        message("Creating installer with merge modules")
+        file(GLOB VCRUNTIME_X86_MERGEMODULES "${VCRUNTIME_REDIST_DIR}/MergeModules/Microsoft_VC*_CRT_x86.msm")
+        file(GLOB VCRUNTIME_X64_MERGEMODULES "${VCRUNTIME_REDIST_DIR}/MergeModules/Microsoft_VC*_CRT_x64.msm")
+        if (NOT VCRUNTIME_X86_MERGEMODULES OR NOT VCRUNTIME_X64_MERGEMODULES)
+            message(FATAL_ERROR "Could not find the VC Redistributable Merge Modules. Please set VCRUNTIME_X86_MERGEMODULE_PATH and VCRUNTIME_X64_MERGEMODULE_PATH manually!")
+        else()
+            list(GET VCRUNTIME_X86_MERGEMODULES 0 VCRUNTIME_X86_MERGEMODULE_PATH)
+            list(GET VCRUNTIME_X64_MERGEMODULES 0 VCRUNTIME_X64_MERGEMODULE_PATH)
+        endif()
+
+        if(CMAKE_SIZEOF_VOID_P EQUAL 8)
+            message("Using ${VCRUNTIME_X64_MERGEMODULE_PATH} VC Redistributable Merge Module")
+            configure_file("msi/x64.wsi" "msi/x64.wsi" @ONLY)
+            set(CPACK_WIX_EXTRA_SOURCES "${CMAKE_CURRENT_BINARY_DIR}/msi/x64.wsi")
+        elseif(CMAKE_SIZEOF_VOID_P EQUAL 4)
+            message("Using ${VCRUNTIME_X86_MERGEMODULE_PATH} VC Redistributable Merge Module")
+            configure_file("msi/x86.wsi" "msi/x86.wsi" @ONLY)
+            set(CPACK_WIX_EXTRA_SOURCES "${CMAKE_CURRENT_BINARY_DIR}/msi/x86.wsi")
+        else()
+            message(FATAL_ERROR "Could not determine architecture, CMAKE_SIZEOF_VOID_P is unexpected: ${CMAKE_SIZEOF_VOID_P}")
+        endif()
+        set(CPACK_WIX_TEMPLATE "${CMAKE_CURRENT_SOURCE_DIR}/msi/WixWinMergeModules.wsi")
+    else()
+        message("Creating installer with redistributables")
+        file(GLOB VCRUNTIME_X86_REDIST_CRT_DIR "${VCRUNTIME_REDIST_DIR}/x86/Microsoft.VC141.CRT")
+        file(GLOB VCRUNTIME_X64_REDIST_CRT_DIR "${VCRUNTIME_REDIST_DIR}/x64/Microsoft.VC141.CRT")
+
+        if (NOT VCRUNTIME_X86_REDIST_CRT_DIR OR NOT VCRUNTIME_X64_REDIST_CRT_DIR)
+            message(FATAL_ERROR "Could not find the VC Redistributable. Please set VCRUNTIME_X86_REDIST_CRT_DIR and VCRUNTIME_X64_REDIST_CRT_DIR manually!")
+        endif()
+
+        if(CMAKE_SIZEOF_VOID_P EQUAL 8)
+            message("Using ${VCRUNTIME_X64_REDIST_CRT_DIR} VC Redistributables")
+            file(COPY "${VCRUNTIME_X64_REDIST_CRT_DIR}/concrt140.dll" DESTINATION "${CMAKE_CURRENT_BINARY_DIR}/redist")
+            file(COPY "${VCRUNTIME_X64_REDIST_CRT_DIR}/msvcp140.dll" DESTINATION "${CMAKE_CURRENT_BINARY_DIR}/redist")
+            file(COPY "${VCRUNTIME_X64_REDIST_CRT_DIR}/msvcp140_1.dll" DESTINATION "${CMAKE_CURRENT_BINARY_DIR}/redist")
+            file(COPY "${VCRUNTIME_X64_REDIST_CRT_DIR}/msvcp140_2.dll" DESTINATION "${CMAKE_CURRENT_BINARY_DIR}/redist")
+            file(COPY "${VCRUNTIME_X64_REDIST_CRT_DIR}/vccorlib140.dll" DESTINATION "${CMAKE_CURRENT_BINARY_DIR}/redist")
+            file(COPY "${VCRUNTIME_X64_REDIST_CRT_DIR}/vcruntime140.dll" DESTINATION "${CMAKE_CURRENT_BINARY_DIR}/redist")
+        elseif(CMAKE_SIZEOF_VOID_P EQUAL 4)
+            message("Using ${VCRUNTIME_X86_REDIST_CRT_DIR} VC Redistributables")
+            file(COPY "${VCRUNTIME_X86_REDIST_CRT_DIR}/concrt140.dll" DESTINATION "${CMAKE_CURRENT_BINARY_DIR}/redist")
+            file(COPY "${VCRUNTIME_X86_REDIST_CRT_DIR}/msvcp140.dll" DESTINATION "${CMAKE_CURRENT_BINARY_DIR}/redist")
+            file(COPY "${VCRUNTIME_X86_REDIST_CRT_DIR}/msvcp140_1.dll" DESTINATION "${CMAKE_CURRENT_BINARY_DIR}/redist")
+            file(COPY "${VCRUNTIME_X86_REDIST_CRT_DIR}/msvcp140_2.dll" DESTINATION "${CMAKE_CURRENT_BINARY_DIR}/redist")
+            file(COPY "${VCRUNTIME_X86_REDIST_CRT_DIR}/vccorlib140.dll" DESTINATION "${CMAKE_CURRENT_BINARY_DIR}/redist")
+            file(COPY "${VCRUNTIME_X86_REDIST_CRT_DIR}/vcruntime140.dll" DESTINATION "${CMAKE_CURRENT_BINARY_DIR}/redist")
+        else()
+            message(FATAL_ERROR "Could not determine architecture, CMAKE_SIZEOF_VOID_P is unexpected: ${CMAKE_SIZEOF_VOID_P}")
+        endif()
+        set(CPACK_WIX_TEMPLATE "${CMAKE_CURRENT_SOURCE_DIR}/msi/WixWin.wsi")
+    endif()
 else()
-set(CPACK_SOURCE_GENERATOR "TGZ")
+	set(CPACK_SOURCE_GENERATOR "TGZ")
 endif(WIN32)
 set(CPACK_SOURCE_PACKAGE_FILE_NAME "${ASSEMBLY_BASE_NAME}-source")
 set(CPACK_SOURCE_IGNORE_FILES "/docs/generated/;${CMAKE_SOURCE_DIR}/build/;~$;${CPACK_SOURCE_IGNORE_FILES};${CMAKE_SOURCE_DIR}/.git/;${CMAKE_SOURCE_DIR}/.idea/;${CMAKE_SOURCE_DIR}/cmake-build-debug/;${CMAKE_SOURCE_DIR}/extensions/expression-language/Scanner.h;${CMAKE_SOURCE_DIR}/extensions/expression-language/Scanner.cpp;${CMAKE_SOURCE_DIR}/extensions/expression-language/Parser.cpp;${CMAKE_SOURCE_DIR}/extensions/expression-language/Parser.hpp;${CMAKE_SOURCE_DIR}/extensions/expression-language/scanner.hh;${CMAKE_SOURCE_DIR}/extensions/expression-language/position.hh;${CMAKE_SOURCE_DIR}/extensions/expression-language/location.hh;${CMAKE_SOURCE_DIR}/extensions/expression-language/stack.hh")
 
-# Generate binary assembly
-install(FILES conf/minifi.properties conf/minifi-log.properties conf/minifi-uid.properties conf/config.yml
-        DESTINATION conf
-        COMPONENT bin)
-        
-install(DIRECTORY extensions/pythonprocessors/
-        DESTINATION minifi-python
-        COMPONENT bin)
+# Generate binary assembly. Exclude conf for windows since we'll be doing the work in the WiX template
+if (NOT WIN32)
+	install(FILES conf/minifi.properties conf/minifi-log.properties conf/minifi-uid.properties conf/config.yml
+			DESTINATION conf
+			COMPONENT bin)
 
-install(PROGRAMS bin/minifi.sh
-        DESTINATION bin
-        COMPONENT bin)
+	install(DIRECTORY extensions/pythonprocessors/
+			DESTINATION minifi-python
+			COMPONENT bin)
+
+	install(PROGRAMS bin/minifi.sh
+			DESTINATION bin
+			COMPONENT bin)
+endif()
 
 install(FILES LICENSE README.md NOTICE
         DESTINATION .
         COMPONENT bin)
-   
-if(WIN32)
-#preference is to use the exe type so that we have a solution that works well for cross compilation
-#but that leaves the onus up to the developer, so until we can automate some of that build let's enforce
-#the exe here temporarily
-#TODO: Remove this and automate this step.
-install(PROGRAMS ${CMAKE_CURRENT_BINARY_DIR}/main/minifi.exe
-        DESTINATION bin
-        COMPONENT bin)
-else()
-install(PROGRAMS ${CMAKE_CURRENT_BINARY_DIR}/main/minifi
-        DESTINATION bin
-        COMPONENT bin)
-        
-endif()
-        
 
-if (WIN32)
-set(CPACK_GENERATOR "WIX")
+if(WIN32)
+	#preference is to use the exe type so that we have a solution that works well for cross compilation
+	#but that leaves the onus up to the developer, so until we can automate some of that build let's enforce
+	#the exe here temporarily
+	#TODO: Remove this and automate this step.
+	#install(PROGRAMS ${CMAKE_CURRENT_BINARY_DIR}/main/minifi.exe
+			#DESTINATION bin
+			#COMPONENT bin)
 else()
-set(CPACK_GENERATOR "TGZ")
+	install(PROGRAMS ${CMAKE_CURRENT_BINARY_DIR}/main/minifi
+			DESTINATION bin
+			COMPONENT bin)
+endif() 
+        
+			
+if (WIN32)
+	set(CPACK_GENERATOR "WIX")
+	set(CPACK_WIX_UPGRADE_GUID "FE29F801-3486-4E9E-AFF9-838C1A5C8D59")
+	set(CPACK_WIX_PRODUCT_ICON "${CMAKE_CURRENT_SOURCE_DIR}/msi/minifi-logo-ico.ico")
+else()
+	set(CPACK_GENERATOR "TGZ")
 endif()
 set(CPACK_COMPONENT_INCLUDE_TOPLEVEL_DIRECTORY 1)
 set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "Apache NiFi MiNiFi C++ version ${VERSION}")
@@ -712,15 +742,18 @@ set(CPACK_PACKAGE_VERSION_MINOR ${PROJECT_VERSION_MINOR})
 set(CPACK_PACKAGE_VERSION_PATCH ${PROJECT_VERSION_PATCH})
 set(CPACK_PACKAGE_DESCRIPTION_FILE "${CMAKE_CURRENT_SOURCE_DIR}/README.md")
 set(CPACK_RESOURCE_FILE_LICENSE "${CMAKE_CURRENT_SOURCE_DIR}/msi/LICENSE.txt")
-set(CPACK_PACKAGE_FILE_NAME "${ASSEMBLY_BASE_NAME}")
 if(NOT WIN32)
-set(CPACK_GENERATOR "TGZ")
-set(CPACK_BINARY_TGZ, "ON")
+	set(CPACK_PACKAGE_FILE_NAME "${ASSEMBLY_BASE_NAME}")
+	set(CPACK_GENERATOR "TGZ")
+	set(CPACK_BINARY_TGZ, "ON")
+else()
+	set(CPACK_PACKAGE_FILE_NAME "${CMAKE_PROJECT_NAME}")
 endif()
+set(CPACK_PACKAGE_INSTALL_DIRECTORY "ApacheNiFiMiNiFi")
 set(CPACK_ARCHIVE_COMPONENT_INSTALL ON)
 set(CPACK_RDKAFKA_COMPONENT_INSTALL ON)
 set(CPACK_MQTT_COMPONENT_INSTALL ON)
-set(CPACK_COMPONENTS_ALL bin conf)
+set(CPACK_COMPONENTS_ALL bin conf minifijni)
 
 
 include(CPack)
@@ -730,19 +763,32 @@ if (NOT SKIP_TESTS)
 	include(BuildTests)
 endif()
 
+## Add KeyValueStorageService tests
+registerTest("${TEST_DIR}/keyvalue-tests")
+
+registerTest("${TEST_DIR}/flow-tests")
+
 include(BuildDocs)
 
 include(DockerConfig)
 
+if(NOT WIN32)
 # Create a custom build target that will run the linter.
-add_custom_target(
-        linter
-        COMMAND ${CMAKE_SOURCE_DIR}/thirdparty/google-styleguide/run_linter.sh ${CMAKE_SOURCE_DIR}/libminifi )
+get_property(extensions GLOBAL PROPERTY EXTENSION-LINTERS)
+add_custom_target(linter
+    COMMAND ${CMAKE_SOURCE_DIR}/thirdparty/google-styleguide/run_linter.sh
+            ${CMAKE_SOURCE_DIR}/libminifi/include/ --
+            ${CMAKE_SOURCE_DIR}/libminifi/src/
+    COMMAND ${CMAKE_SOURCE_DIR}/thirdparty/google-styleguide/run_linter.sh
+            ${CMAKE_SOURCE_DIR}/libminifi/include/ --
+            ${CMAKE_SOURCE_DIR}/libminifi/test/
+    DEPENDS ${extensions})
+endif(NOT WIN32)
 
 # Custom target to download and run Apache Release Audit Tool (RAT)
 add_custom_target(
         apache-rat
         ${CMAKE_COMMAND} -P ${CMAKE_SOURCE_DIR}/cmake/RunApacheRAT.cmake
-        COMMAND java -jar ${CMAKE_SOURCE_DIR}/thirdparty/apache-rat/apache-rat-0.12/apache-rat-0.12.jar -E ${CMAKE_SOURCE_DIR}/thirdparty/apache-rat/.rat-excludes -d ${CMAKE_SOURCE_DIR} | grep -B 1 -A 15 Summary )
+        COMMAND java -jar ${CMAKE_SOURCE_DIR}/thirdparty/apache-rat/apache-rat-0.13/apache-rat-0.13.jar -E ${CMAKE_SOURCE_DIR}/thirdparty/apache-rat/.rat-excludes -d ${CMAKE_SOURCE_DIR} | grep -B 1 -A 15 Summary )
 
 feature_summary(WHAT ALL FILENAME ${CMAKE_BINARY_DIR}/all.log)

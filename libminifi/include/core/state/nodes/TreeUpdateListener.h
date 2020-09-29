@@ -15,9 +15,11 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#ifndef LIBMINIFI_INCLUDE_C2_METRICS_H_
-#define LIBMINIFI_INCLUDE_C2_METRICS_H_
+#ifndef LIBMINIFI_INCLUDE_CORE_STATE_NODES_TREEUPDATELISTENER_H_
+#define LIBMINIFI_INCLUDE_CORE_STATE_NODES_TREEUPDATELISTENER_H_
 
+#include <memory>
+#include <utility>
 #include <vector>
 
 #include "../nodes/MetricsBase.h"
@@ -35,9 +37,8 @@ namespace response {
  */
 class MetricsUpdate : public Update {
  public:
-  MetricsUpdate(UpdateStatus status)
+  MetricsUpdate(UpdateStatus status) // NOLINT
       : Update(status) {
-
   }
   virtual bool validate() {
     return true;
@@ -52,12 +53,9 @@ class OperationWatcher : public utils::AfterExecute<Update> {
 
   explicit OperationWatcher(OperationWatcher && other)
       : running_(std::move(other.running_)) {
-
   }
 
-  ~OperationWatcher() {
-
-  }
+  ~OperationWatcher() = default;
 
   virtual bool isFinished(const Update &result) {
     if (result.getStatus().getState() == UpdateState::READ_COMPLETE && running_) {
@@ -72,57 +70,13 @@ class OperationWatcher : public utils::AfterExecute<Update> {
 
  protected:
   std::atomic<bool> *running_;
-
 };
 
-class TreeUpdateListener {
- public:
-  TreeUpdateListener(const std::shared_ptr<response::NodeReporter> &source, const std::shared_ptr<response::ResponseNodeSink> &sink)
-      : running_(true),
-        source_(source),
-        sink_(sink){
+}  // namespace response
+}  // namespace state
+}  // namespace minifi
+}  // namespace nifi
+}  // namespace apache
+}  // namespace org
 
-    function_ = [&]() {
-      while(running_) {
-        std::vector<std::shared_ptr<response::ResponseNode>> metric_vector;
-        // simple pass through for the metrics
-        if (nullptr != source_ && nullptr != sink_) {
-          source_->getResponseNodes(metric_vector,0);
-          for(auto metric : metric_vector) {
-            sink_->setResponseNodes(metric);
-          }
-        }
-        std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-      }
-      return MetricsUpdate(UpdateState::READ_COMPLETE);
-    };
-  }
-
-  void stop() {
-    running_ = false;
-  }
-
-  std::function<Update()> &getFunction() {
-    return function_;
-  }
-
-  std::future<Update> &getFuture() {
-    return future_;
-  }
-
- private:
-  std::function<Update()> function_;
-  std::future<Update> future_;
-  std::atomic<bool> running_;
-  std::shared_ptr<response::NodeReporter> source_;
-  std::shared_ptr<response::ResponseNodeSink> sink_;
-};
-
-} /* namespace metrics */
-} /* namespace state */
-} /* namespace minifi */
-} /* namespace nifi */
-} /* namespace apache */
-} /* namespace org */
-
-#endif /* LIBMINIFI_INCLUDE_C2_METRICS_H_ */
+#endif  // LIBMINIFI_INCLUDE_CORE_STATE_NODES_TREEUPDATELISTENER_H_

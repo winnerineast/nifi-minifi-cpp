@@ -17,6 +17,7 @@
  */
 
 #include "c2/C2Agent.h"
+
 #include <csignal>
 #include <utility>
 #include <limits>
@@ -24,30 +25,41 @@
 #include <map>
 #include <string>
 #include <memory>
+
 #include "c2/ControllerSocketProtocol.h"
+#include "core/ProcessContext.h"
+#include "core/CoreComponentState.h"
 #include "core/state/UpdateController.h"
 #include "core/logging/Logger.h"
 #include "core/logging/LoggerConfiguration.h"
 #include "utils/file/DiffUtils.h"
 #include "utils/file/FileUtils.h"
 #include "utils/file/FileManager.h"
+#include "utils/GeneralUtils.h"
 #include "utils/HTTPClient.h"
+#include "utils/Monitors.h"
+
 namespace org {
 namespace apache {
 namespace nifi {
 namespace minifi {
 namespace c2 {
 
-C2Agent::C2Agent(const std::shared_ptr<core::controller::ControllerServiceProvider> &controller, const std::shared_ptr<state::StateMonitor> &updateSink,
+C2Agent::C2Agent(const std::shared_ptr<core::controller::ControllerServiceProvider> &controller,
+                 const std::shared_ptr<state::StateMonitor> &updateSink,
                  const std::shared_ptr<Configure> &configuration)
-    : controller_(controller),
+    : heart_beat_period_(3000),
+      max_c2_responses(5),
       update_sink_(updateSink),
       update_service_(nullptr),
+      controller_(controller),
       configuration_(configuration),
-      heart_beat_period_(3000),
-      max_c2_responses(5),
-      logger_(logging::LoggerFactory<C2Agent>::getLogger()) {
+      protocol_(nullptr),
+      logger_(logging::LoggerFactory<C2Agent>::getLogger()),
+      thread_pool_(2, false, nullptr, "C2 threadpool") {
   allow_updates_ = true;
+
+  manifest_sent_ = false;
 
   running_c2_configuration = std::make_shared<Configure>();
 
@@ -64,70 +76,94 @@ C2Agent::C2Agent(const std::shared_ptr<core::controller::ControllerServiceProvid
   configure(configuration, false);
 
   c2_producer_ = [&]() {
-    auto now = std::chrono::steady_clock::now();
-    auto time_since = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_run_).count();
-
     // place priority on messages to send to the c2 server
-      if ( protocol_.load() != nullptr && request_mutex.try_lock_until(now + std::chrono::seconds(1)) ) {
-        if (requests.size() > 0) {
-          int count = 0;
-          do {
-            const C2Payload payload(std::move(requests.back()));
-            requests.pop_back();
-            try {
-              C2Payload && response = protocol_.load()->consumePayload(payload);
-              enqueue_c2_server_response(std::move(response));
-            }
-            catch(const std::exception &e) {
-              logger_->log_error("Exception occurred while consuming payload. error: %s", e.what());
-            }
-            catch(...) {
-              logger_->log_error("Unknonwn exception occurred while consuming payload.");
-            }
-          }while(requests.size() > 0 && ++count < max_c2_responses);
-        }
-        request_mutex.unlock();
-      }
-
-      if ( time_since > heart_beat_period_ ) {
-        last_run_ = now;
-        try {
-          performHeartBeat();
-        }
-        catch(const std::exception &e) {
-          logger_->log_error("Exception occurred while performing heartbeat. error: %s", e.what());
-        }
-        catch(...) {
-          logger_->log_error("Unknonwn exception occurred while performing heartbeat.");
+    if (protocol_.load() != nullptr) {
+      std::vector<C2Payload> payload_batch;
+      payload_batch.reserve(max_c2_responses);
+      auto getRequestPayload = [&payload_batch] (C2Payload&& payload) { payload_batch.emplace_back(std::move(payload)); };
+      for (std::size_t attempt_num = 0; attempt_num < max_c2_responses; ++attempt_num) {
+        if (!requests.consume(getRequestPayload)) {
+          break;
         }
       }
+      std::for_each(
+        std::make_move_iterator(payload_batch.begin()),
+        std::make_move_iterator(payload_batch.end()),
+        [&] (C2Payload&& payload) {
+          try {
+            C2Payload && response = protocol_.load()->consumePayload(std::move(payload));
+            enqueue_c2_server_response(std::move(response));
+          }
+          catch(const std::exception &e) {
+            logger_->log_error("Exception occurred while consuming payload. error: %s", e.what());
+          }
+          catch(...) {
+            logger_->log_error("Unknonwn exception occurred while consuming payload.");
+          }
+      });
 
-      checkTriggers();
+      try {
+        performHeartBeat();
+      }
+      catch (const std::exception &e) {
+        logger_->log_error("Exception occurred while performing heartbeat. error: %s", e.what());
+      }
+      catch (...) {
+        logger_->log_error("Unknonwn exception occurred while performing heartbeat.");
+      }
+    }
 
-      std::this_thread::sleep_for(std::chrono::milliseconds(heart_beat_period_ > 500 ? 500 : heart_beat_period_));
-      return state::Update(state::UpdateStatus(state::UpdateState::READ_COMPLETE, false));
-    };
+    checkTriggers();
+
+    return utils::TaskRescheduleInfo::RetryIn(std::chrono::milliseconds(heart_beat_period_));
+  };
 
   functions_.push_back(c2_producer_);
 
-  c2_consumer_ = [&]() {
-    auto now = std::chrono::steady_clock::now();
-    if ( queue_mutex.try_lock_until(now + std::chrono::seconds(1)) ) {
-      if (responses.size() > 0) {
-        const C2Payload payload(std::move(responses.back()));
-        responses.pop_back();
-        extractPayload(std::move(payload));
+  c2_consumer_ = [&] {
+    if (false == responses.empty()) {
+      const auto call_extractPayload = [this](C2Payload&& payload) { extractPayload(std::move(payload)); };
+      const auto consume_success = responses.consume(call_extractPayload);
+      if (!consume_success) {
+        extractPayload(C2Payload{ Operation::HEARTBEAT });
       }
-      queue_mutex.unlock();
     }
-    return state::Update(state::UpdateStatus(state::UpdateState::READ_COMPLETE, false));
+    return utils::TaskRescheduleInfo::RetryIn(std::chrono::milliseconds(C2RESPONSE_POLL_MS));
   };
-
   functions_.push_back(c2_consumer_);
 }
 
+void C2Agent::start() {
+  if (controller_running_) {
+    return;
+  }
+  task_ids_.clear();
+  for (const auto& function : functions_) {
+    utils::Identifier uuid;
+    utils::IdGenerator::getIdGenerator()->generate(uuid);
+    const std::string uuid_str = uuid.to_string();
+    task_ids_.push_back(uuid_str);
+    auto monitor = utils::make_unique<utils::ComplexMonitor>();
+    utils::Worker<utils::TaskRescheduleInfo> functor(function, uuid_str, std::move(monitor));
+    std::future<utils::TaskRescheduleInfo> future;
+    thread_pool_.execute(std::move(functor), future);
+  }
+  controller_running_ = true;
+  thread_pool_.start();
+  logger_->log_info("C2 agent started");
+}
+
+void C2Agent::stop() {
+  controller_running_ = false;
+  for (const auto& id : task_ids_) {
+    thread_pool_.stopTasks(id);
+  }
+  thread_pool_.shutdown();
+  logger_->log_info("C2 agent stopped");
+}
+
 void C2Agent::checkTriggers() {
-  logger_->log_info("Checking %d triggers", triggers_.size());
+  logger_->log_debug("Checking %d triggers", triggers_.size());
   for (const auto &trigger : triggers_) {
     if (trigger->triggered()) {
       /**
@@ -154,32 +190,39 @@ void C2Agent::configure(const std::shared_ptr<Configure> &configure, bool reconf
       clazz = "CoapProtocol";
     }
     logger_->log_info("Class is %s", clazz);
-    auto protocol = core::ClassLoader::getDefaultClassLoader().instantiateRaw(clazz, clazz);
 
+    auto protocol = core::ClassLoader::getDefaultClassLoader().instantiateRaw(clazz, clazz);
     if (protocol == nullptr) {
-      logger_->log_info("Class %s not found", clazz);
+      logger_->log_warn("Class %s not found", clazz);
       protocol = core::ClassLoader::getDefaultClassLoader().instantiateRaw("CoapProtocol", "CoapProtocol");
       if (!protocol) {
-        logger_->log_info("Attempted to load CoapProtocol. To enable C2, please specify an active protocol for this agent.");
-        return;
-      } else {
-        logger_->log_info("Class is CoapProtocol");
+        const char* errmsg = "Attempted to load CoapProtocol. To enable C2, please specify an active protocol for this agent.";
+        logger_->log_error(errmsg);
+        throw minifi::Exception{ minifi::GENERAL_EXCEPTION, errmsg };
       }
+
+      logger_->log_info("Class is CoapProtocol");
     }
-    C2Protocol *old_protocol = protocol_.exchange(dynamic_cast<C2Protocol*>(protocol));
+
+    // Since !reconfigure, the call comes from the ctor and protocol_ is null, therefore no delete is necessary
+    protocol_.exchange(dynamic_cast<C2Protocol *>(protocol));
 
     protocol_.load()->initialize(controller_, configuration_);
-
-    if (reconfigure && old_protocol != nullptr) {
-      delete old_protocol;
-    }
   } else {
     protocol_.load()->update(configure);
   }
 
   if (configure->get("nifi.c2.agent.heartbeat.period", "c2.agent.heartbeat.period", heartbeat_period)) {
+    core::TimeUnit unit;
+
     try {
-      heart_beat_period_ = std::stoi(heartbeat_period);
+      int64_t schedulingPeriod = 0;
+      if (core::Property::StringToTime(heartbeat_period, schedulingPeriod, unit) && core::Property::ConvertTimeUnitToMS(schedulingPeriod, unit, schedulingPeriod)) {
+        heart_beat_period_ = schedulingPeriod;
+        logger_->log_debug("Using %u ms as the heartbeat period", heart_beat_period_);
+      } else {
+        heart_beat_period_ = std::stoi(heartbeat_period);
+      }
     } catch (const std::invalid_argument &ie) {
       heart_beat_period_ = 3000;
     }
@@ -224,7 +267,7 @@ void C2Agent::configure(const std::shared_ptr<Configure> &configure, bool reconf
   if (configure->get("nifi.c2.agent.heartbeat.reporter.classes", "c2.agent.heartbeat.reporter.classes", heartbeat_reporters)) {
     std::vector<std::string> reporters = utils::StringUtils::split(heartbeat_reporters, ",");
     std::lock_guard<std::mutex> lock(heartbeat_mutex);
-    for (auto reporter : reporters) {
+    for (const auto& reporter : reporters) {
       auto heartbeat_reporter_obj = core::ClassLoader::getDefaultClassLoader().instantiate(reporter, reporter);
       if (heartbeat_reporter_obj == nullptr) {
         logger_->log_debug("Could not instantiate %s", reporter);
@@ -240,7 +283,7 @@ void C2Agent::configure(const std::shared_ptr<Configure> &configure, bool reconf
   if (configure->get("nifi.c2.agent.trigger.classes", "c2.agent.trigger.classes", trigger_classes)) {
     std::vector<std::string> triggers = utils::StringUtils::split(trigger_classes, ",");
     std::lock_guard<std::mutex> lock(heartbeat_mutex);
-    for (auto trigger : triggers) {
+    for (const auto& trigger : triggers) {
       auto trigger_obj = core::ClassLoader::getDefaultClassLoader().instantiate(trigger, trigger);
       if (trigger_obj == nullptr) {
         logger_->log_debug("Could not instantiate %s", trigger);
@@ -265,56 +308,24 @@ void C2Agent::configure(const std::shared_ptr<Configure> &configure, bool reconf
 
 void C2Agent::performHeartBeat() {
   C2Payload payload(Operation::HEARTBEAT);
-
   logger_->log_trace("Performing heartbeat");
-
-  std::map<std::string, std::shared_ptr<state::response::ResponseNode>> metrics_copy;
-  {
-    std::lock_guard<std::timed_mutex> lock(metrics_mutex_);
-    if (metrics_map_.size() > 0) {
-      metrics_copy = std::move(metrics_map_);
+  std::shared_ptr<state::response::NodeReporter> reporter = std::dynamic_pointer_cast<state::response::NodeReporter>(update_sink_);
+  std::vector<std::shared_ptr<state::response::ResponseNode>> metrics;
+  if (reporter) {
+    if (!manifest_sent_) {
+      // include agent manifest for the first heartbeat
+      metrics = reporter->getHeartbeatNodes(true);
+      manifest_sent_ = true;
+    } else {
+      metrics = reporter->getHeartbeatNodes(false);
     }
-  }
 
-  if (metrics_copy.size() > 0) {
-    C2Payload metrics(Operation::HEARTBEAT);
-    metrics.setLabel("metrics");
-
-    for (auto metric : metrics_copy) {
-      if (metric.second->serialize().size() == 0)
-        continue;
+    payload.reservePayloads(metrics.size());
+    for (const auto& metric : metrics) {
       C2Payload child_metric_payload(Operation::HEARTBEAT);
-      child_metric_payload.setLabel(metric.first);
-      serializeMetrics(child_metric_payload, metric.first, metric.second->serialize(), metric.second->isArray());
-      metrics.addPayload(std::move(child_metric_payload));
-    }
-    payload.addPayload(std::move(metrics));
-  }
-
-  if (device_information_.size() > 0) {
-    C2Payload deviceInfo(Operation::HEARTBEAT);
-    deviceInfo.setLabel("AgentInformation");
-
-    for (auto metric : device_information_) {
-      C2Payload child_metric_payload(Operation::HEARTBEAT);
-      child_metric_payload.setLabel(metric.first);
-      if (metric.second->isArray()) {
-        child_metric_payload.setContainer(true);
-      }
-      serializeMetrics(child_metric_payload, metric.first, metric.second->serialize(), metric.second->isArray());
-      deviceInfo.addPayload(std::move(child_metric_payload));
-    }
-    payload.addPayload(std::move(deviceInfo));
-  }
-
-  if (!root_response_nodes_.empty()) {
-    for (auto metric : root_response_nodes_) {
-      C2Payload child_metric_payload(Operation::HEARTBEAT);
-      child_metric_payload.setLabel(metric.first);
-      if (metric.second->isArray()) {
-        child_metric_payload.setContainer(true);
-      }
-      serializeMetrics(child_metric_payload, metric.first, metric.second->serialize(), metric.second->isArray());
+      child_metric_payload.setLabel(metric->getName());
+      child_metric_payload.setContainer(metric->isArray());
+      serializeMetrics(child_metric_payload, metric->getName(), metric->serialize(), metric->isArray());
       payload.addPayload(std::move(child_metric_payload));
     }
   }
@@ -330,6 +341,8 @@ void C2Agent::performHeartBeat() {
 }
 
 void C2Agent::serializeMetrics(C2Payload &metric_payload, const std::string &name, const std::vector<state::response::SerializedResponseNode> &metrics, bool is_container, bool is_collapsible) {
+  const auto payloads = std::count_if(begin(metrics), end(metrics), [](const state::response::SerializedResponseNode& metric) { return !metric.children.empty(); });
+  metric_payload.reservePayloads(metric_payload.getNestedPayloads().size() + payloads);
   for (const auto &metric : metrics) {
     if (metric.children.size() > 0) {
       C2Payload child_metric_payload(metric_payload.getOperation());
@@ -427,6 +440,28 @@ void C2Agent::handle_c2_server_response(const C2ContentResponse &resp) {
         update_sink_->drainRepositories();
         C2Payload response(Operation::ACKNOWLEDGE, resp.ident, false, true);
         enqueue_c2_response(std::move(response));
+      } else if (resp.name == "corecomponentstate") {
+        // TODO(bakaid): untested
+        std::vector<std::shared_ptr<state::StateController>> components = update_sink_->getComponents(resp.name);
+        auto state_manager_provider = core::ProcessContext::getStateManagerProvider(logger_, controller_, configuration_);
+        if (state_manager_provider != nullptr) {
+          for (auto &component : components) {
+            logger_->log_debug("Clearing state for component %s", component->getComponentName());
+            auto state_manager = state_manager_provider->getCoreComponentStateManager(component->getComponentUUID());
+            if (state_manager != nullptr) {
+              component->stop(true);
+              state_manager->clear();
+              state_manager->persist();
+              component->start();
+            } else {
+              logger_->log_warn("Failed to get StateManager for component %s", component->getComponentUUID());
+            }
+          }
+        } else {
+          logger_->log_error("Failed to get StateManagerProvider");
+        }
+        C2Payload response(Operation::ACKNOWLEDGE, resp.ident, false, true);
+        enqueue_c2_response(std::move(response));
       } else {
         logger_->log_debug("Clearing unknown %s", resp.name);
       }
@@ -444,7 +479,7 @@ void C2Agent::handle_c2_server_response(const C2ContentResponse &resp) {
       update_sink_->stop(true);
       C2Payload response(Operation::ACKNOWLEDGE, resp.ident, false, true);
       protocol_.load()->consumePayload(std::move(response));
-      exit(1);
+      restart_agent();
     }
       break;
     case Operation::START:
@@ -454,7 +489,6 @@ void C2Agent::handle_c2_server_response(const C2ContentResponse &resp) {
       }
 
       std::vector<std::shared_ptr<state::StateController>> components = update_sink_->getComponents(resp.name);
-
       // stop all referenced components.
       for (auto &component : components) {
         logger_->log_debug("Stopping component %s", component->getComponentName());
@@ -477,90 +511,66 @@ void C2Agent::handle_c2_server_response(const C2ContentResponse &resp) {
   }
 }
 
+C2Payload C2Agent::prepareConfigurationOptions(const C2ContentResponse &resp) const {
+    auto unsanitized_keys = configuration_->getConfiguredKeys();
+    std::vector<std::string> keys;
+    std::copy_if(unsanitized_keys.begin(), unsanitized_keys.end(), std::back_inserter(keys),
+            [](std::string key) {return key.find("pass") == std::string::npos;});
+
+    C2Payload response(Operation::ACKNOWLEDGE, resp.ident, false, true);
+    C2Payload options(Operation::ACKNOWLEDGE);
+    options.setLabel("configuration_options");
+    std::string value;
+    for (auto key : keys) {
+      C2ContentResponse option(Operation::ACKNOWLEDGE);
+      option.name = key;
+      if (configuration_->get(key, value)) {
+        option.operation_arguments[key] = value;
+        options.addContent(std::move(option));
+      }
+    }
+    response.addPayload(std::move(options));
+    return response;
+}
+
 /**
  * Descriptions are special types of requests that require information
  * to be put into the acknowledgement
  */
 void C2Agent::handle_describe(const C2ContentResponse &resp) {
+  auto reporter = std::dynamic_pointer_cast<state::response::NodeReporter>(update_sink_);
   if (resp.name == "metrics") {
-    auto reporter = std::dynamic_pointer_cast<state::response::NodeReporter>(update_sink_);
-
-    if (reporter != nullptr) {
-      auto metricsClass = resp.operation_arguments.find("metricsClass");
-      uint8_t metric_class_id = 0;
-      if (metricsClass != resp.operation_arguments.end()) {
-        // we have a class
-        try {
-          metric_class_id = std::stoi(metricsClass->second.to_string());
-        } catch (...) {
-          logger_->log_error("Could not convert %s into an integer", metricsClass->second.to_string());
-        }
-      }
-
-      std::vector<std::shared_ptr<state::response::ResponseNode>> metrics_vec;
-
-      reporter->getResponseNodes(metrics_vec, metric_class_id);
-      C2Payload response(Operation::ACKNOWLEDGE, resp.ident, false, true);
-      response.setLabel("metrics");
-      for (auto metric : metrics_vec) {
-        serializeMetrics(response, metric->getName(), metric->serialize());
-      }
-      enqueue_c2_response(std::move(response));
-    }
-
-  } else if (resp.name == "configuration") {
-    auto unsanitized_keys = configuration_->getConfiguredKeys();
-    std::vector<std::string> keys;
-    std::copy_if(unsanitized_keys.begin(), unsanitized_keys.end(), std::back_inserter(keys), [](std::string key) {return key.find("pass") == std::string::npos;});
     C2Payload response(Operation::ACKNOWLEDGE, resp.ident, false, true);
-    response.setLabel("configuration_options");
-    C2Payload options(Operation::ACKNOWLEDGE, resp.ident, false, true);
-    options.setLabel("configuration_options");
-    std::string value;
-    for (auto key : keys) {
-      C2ContentResponse option(Operation::ACKNOWLEDGE);
-      option.name = key;
-      if (configuration_->get(key, value)) {
-        option.operation_arguments[key] = value;
-        options.addContent(std::move(option));
+    if (reporter != nullptr) {
+      auto iter = resp.operation_arguments.find("metricsClass");
+      std::string metricsClass;
+      if (iter != resp.operation_arguments.end()) {
+        metricsClass = iter->second.to_string();
       }
+      auto metricsNode = reporter->getMetricsNode(metricsClass);
+      C2Payload metrics(Operation::ACKNOWLEDGE);
+      metricsClass.empty() ? metrics.setLabel("metrics") : metrics.setLabel(metricsClass);
+      if (metricsNode) {
+        serializeMetrics(metrics, metricsNode->getName(), metricsNode->serialize(), metricsNode->isArray());
+      }
+      response.addPayload(std::move(metrics));
     }
-    response.addPayload(std::move(options));
     enqueue_c2_response(std::move(response));
     return;
+  } else if (resp.name == "configuration") {
+    auto configOptions = prepareConfigurationOptions(resp);
+    enqueue_c2_response(std::move(configOptions));
+    return;
   } else if (resp.name == "manifest") {
-    auto keys = configuration_->getConfiguredKeys();
-    C2Payload response(Operation::ACKNOWLEDGE, resp.ident, false, true);
-    response.setLabel("configuration_options");
-    C2Payload options(Operation::ACKNOWLEDGE, resp.ident, false, true);
-    options.setLabel("configuration_options");
-    std::string value;
-    for (auto key : keys) {
-      C2ContentResponse option(Operation::ACKNOWLEDGE);
-      option.name = key;
-      if (configuration_->get(key, value)) {
-        option.operation_arguments[key] = value;
-        options.addContent(std::move(option));
-      }
+    C2Payload response(prepareConfigurationOptions(resp));
+    if (reporter != nullptr) {
+      C2Payload agentInfo(Operation::ACKNOWLEDGE, resp.ident, false, true);
+      agentInfo.setLabel("agentInfo");
+
+      const auto manifest = reporter->getAgentManifest();
+      serializeMetrics(agentInfo, manifest->getName(), manifest->serialize());
+      response.addPayload(std::move(agentInfo));
     }
-    response.addPayload(std::move(options));
-
-    if (device_information_.size() > 0) {
-      C2Payload deviceInfo(Operation::HEARTBEAT);
-      deviceInfo.setLabel("AgentInformation");
-
-      for (auto metric : device_information_) {
-        C2Payload child_metric_payload(Operation::HEARTBEAT);
-        child_metric_payload.setLabel(metric.first);
-        if (metric.second->isArray()) {
-          child_metric_payload.setContainer(true);
-        }
-        serializeMetrics(child_metric_payload, metric.first, metric.second->serialize(), metric.second->isArray());
-        deviceInfo.addPayload(std::move(child_metric_payload));
-      }
-      response.addPayload(std::move(deviceInfo));
-    }
-
     enqueue_c2_response(std::move(response));
     return;
   } else if (resp.name == "jstack") {
@@ -573,7 +583,6 @@ void C2Agent::handle_describe(const C2ContentResponse &resp) {
       }
       auto keys = configuration_->getConfiguredKeys();
       C2Payload response(Operation::ACKNOWLEDGE, resp.ident, false, true);
-      response.setLabel("configuration_options");
       for (const auto &trace : traces) {
         C2Payload options(Operation::ACKNOWLEDGE, resp.ident, false, true);
         options.setLabel(trace.getName());
@@ -587,7 +596,31 @@ void C2Agent::handle_describe(const C2ContentResponse &resp) {
         response.addPayload(std::move(options));
       }
       enqueue_c2_response(std::move(response));
+      return;
     }
+  } else if (resp.name == "corecomponentstate") {
+    C2Payload response(Operation::ACKNOWLEDGE, resp.ident, false, true);
+    response.setLabel("corecomponentstate");
+    C2Payload states(Operation::ACKNOWLEDGE, resp.ident, false, true);
+    states.setLabel("corecomponentstate");
+    auto state_manager_provider = core::ProcessContext::getStateManagerProvider(logger_, controller_, configuration_);
+    if (state_manager_provider != nullptr) {
+      auto core_component_states = state_manager_provider->getAllCoreComponentStates();
+      for (const auto& core_component_state : core_component_states) {
+        C2Payload state(Operation::ACKNOWLEDGE, resp.ident, false, true);
+        state.setLabel(core_component_state.first);
+        for (const auto& kv : core_component_state.second) {
+          C2ContentResponse entry(Operation::ACKNOWLEDGE);
+          entry.name = kv.first;
+          entry.operation_arguments[kv.first] = kv.second;
+          state.addContent(std::move(entry));
+        }
+        states.addPayload(std::move(state));
+      }
+    }
+    response.addPayload(std::move(states));
+    enqueue_c2_response(std::move(response));
+    return;
   }
   C2Payload response(Operation::ACKNOWLEDGE, resp.ident, false, true);
   enqueue_c2_response(std::move(response));
@@ -694,6 +727,7 @@ void C2Agent::handle_update(const C2ContentResponse &resp) {
       } else {
         logger_->log_debug("update failed.");
         C2Payload response(Operation::ACKNOWLEDGE, state::UpdateState::SET_ERROR, resp.ident, false, true);
+        response.setRawData("Error while applying flow. Likely missing processors");
         enqueue_c2_response(std::move(response));
       }
       // send
@@ -835,7 +869,8 @@ void C2Agent::restart_agent() {
   }
 
   std::stringstream command;
-  command << cwd << "/minifi.sh restart";
+  command << cwd << "/bin/minifi.sh restart";
+  system(command.str().c_str());
 }
 
 void C2Agent::update_agent() {
@@ -844,28 +879,8 @@ void C2Agent::update_agent() {
   }
 }
 
-int16_t C2Agent::setResponseNodes(const std::shared_ptr<state::response::ResponseNode> &metric) {
-  auto now = std::chrono::steady_clock::now();
-  if (metrics_mutex_.try_lock_until(now + std::chrono::seconds(1))) {
-    root_response_nodes_[metric->getName()] = metric;
-    metrics_mutex_.unlock();
-    return 0;
-  }
-  return -1;
-}
-
-int16_t C2Agent::setMetricsNodes(const std::shared_ptr<state::response::ResponseNode> &metric) {
-  auto now = std::chrono::steady_clock::now();
-  if (metrics_mutex_.try_lock_until(now + std::chrono::seconds(1))) {
-    metrics_map_[metric->getName()] = metric;
-    metrics_mutex_.unlock();
-    return 0;
-  }
-  return -1;
-}
-
-} /* namespace c2 */
-} /* namespace minifi */
-} /* namespace nifi */
-} /* namespace apache */
-} /* namespace org */
+}  // namespace c2
+}  // namespace minifi
+}  // namespace nifi
+}  // namespace apache
+}  // namespace org

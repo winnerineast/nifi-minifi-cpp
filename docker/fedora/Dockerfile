@@ -26,6 +26,7 @@ ARG GID
 ARG MINIFI_VERSION
 ARG MINIFI_SOURCE_CODE
 ARG DUMP_LOCATION
+ARG ENABLE_JNI
 
 # Install the system dependencies needed for a build
 
@@ -34,7 +35,7 @@ ENV MINIFI_BASE_DIR /opt/minifi
 RUN mkdir -p $MINIFI_BASE_DIR 
 USER $USER
 
-RUN yum -y install java-1.8.0-openjdk java-1.8.0-openjdk-devel flex bison make patch sudo git which maven
+RUN yum -y install java-1.8.0-openjdk java-1.8.0-openjdk-devel flex bison make patch sudo git which maven libtool autoconf automake
 
 
 ADD $MINIFI_SOURCE_CODE $MINIFI_BASE_DIR
@@ -53,5 +54,5 @@ RUN cd $MINIFI_BASE_DIR \
 	&& rm -rf build \ 
 	&& mkdir build \
 	&& cd build \
-	&& cmake3 -DUSE_SHARED_LIBS= -DFAIL_ON_WARNINGS=OFF -DENABLE_LIBRDKAFKA=ON -DPORTABLE=ON -DENABLE_COAP=ON -DCMAKE_BUILD_TYPE=Release -DSKIP_TESTS=true -DENABLE_JNI=ON .. \
+	&& cmake3 -DUSE_SHARED_LIBS=  -DENABLE_MQTT=ON -DFAIL_ON_WARNINGS=OFF -DENABLE_LIBRDKAFKA=ON -DPORTABLE=ON -DENABLE_COAP=ON -DCMAKE_BUILD_TYPE=Release -DSKIP_TESTS=true -DENABLE_JNI=$ENABLE_JNI .. \
 	&& make -j8 package 

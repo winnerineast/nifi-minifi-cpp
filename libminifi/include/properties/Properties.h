@@ -17,26 +17,14 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#ifndef __PROPERTIES_H__
-#define __PROPERTIES_H__
+#ifndef LIBMINIFI_INCLUDE_PROPERTIES_PROPERTIES_H_
+#define LIBMINIFI_INCLUDE_PROPERTIES_PROPERTIES_H_
 
-#include <stdio.h>
+#include <memory>
+#include <vector>
 #include <string>
 #include <map>
-#include <stdlib.h>
-#include <errno.h>
-#include <iostream>
-#include <fstream>
 #include "core/logging/Logger.h"
-
-#ifndef FILE_SEPARATOR
-	#ifdef WIN32
-		#define FILE_SEPARATOR '\\'
-	#else
-		#define FILE_SEPARATOR '/'
-	#endif
-#endif
-
 
 namespace org {
 namespace apache {
@@ -45,10 +33,12 @@ namespace minifi {
 
 class Properties {
  public:
-  Properties();
+  Properties(const std::string& name = ""); // NOLINT
 
-  virtual ~Properties() {
+  virtual ~Properties() = default;
 
+  virtual const std::string& getName() const {
+    return name_;
   }
 
   // Clear the load config
@@ -63,9 +53,9 @@ class Properties {
     dirty_ = true;
   }
   // Check whether the config value existed
-  bool has(std::string key) {
+  bool has(std::string key) const {
     std::lock_guard<std::mutex> lock(mutex_);
-    return (properties_.find(key) != properties_.end());
+    return properties_.count(key) > 0;
   }
   /**
    * Returns the config value by placing it into the referenced param value
@@ -73,7 +63,7 @@ class Properties {
    * @param value value in which to place the map's stored property value
    * @returns true if found, false otherwise.
    */
-  bool get(const std::string &key, std::string &value);
+  bool get(const std::string &key, std::string &value) const;
 
   /**
    * Returns the config value by placing it into the referenced param value
@@ -84,24 +74,29 @@ class Properties {
    * @param value value in which to place the map's stored property value
    * @returns true if found, false otherwise.
    */
-  bool get(const std::string &key, const std::string &alternate_key, std::string &value);
+  bool get(const std::string &key, const std::string &alternate_key, std::string &value) const;
 
   /**
    * Returns the configuration value or an empty string.
    * @return value corresponding to key or empty value.
    */
-  int getInt(const std::string &key, int default_value);
+  int getInt(const std::string &key, int default_value) const;
 
   // Parse one line in configure file like key=value
   bool parseConfigureFileLine(char *buf, std::string &prop_key, std::string &prop_value);
-  // Load Configure File
+
+  /**
+   * Load configure file
+   * @param fileName path of the configuration file RELATIVE to MINIFI_HOME set by setHome()
+   */
   void loadConfigureFile(const char *fileName);
+
   // Set the determined MINIFI_HOME
   void setHome(std::string minifiHome) {
     minifi_home_ = minifiHome;
   }
 
-  std::vector<std::string> getConfiguredKeys() {
+  std::vector<std::string> getConfiguredKeys() const {
     std::vector<std::string> keys;
     for (auto &property : properties_) {
       keys.push_back(property.first);
@@ -110,7 +105,7 @@ class Properties {
   }
 
   // Get the determined MINIFI_HOME
-  std::string getHome() {
+  std::string getHome() const {
     return minifi_home_;
   }
   // Parse Command Line
@@ -119,28 +114,28 @@ class Properties {
   bool persistProperties();
 
  protected:
-
   bool validateConfigurationFile(const std::string &file);
 
   std::map<std::string, std::string> properties_;
 
 
  private:
-
   std::atomic<bool> dirty_;
 
   std::string properties_file_;
 
   // Mutex for protection
-  std::mutex mutex_;
+  mutable std::mutex mutex_;
   // Logger
   std::shared_ptr<minifi::core::logging::Logger> logger_;
   // Home location for this executable
   std::string minifi_home_;
+
+  std::string name_;
 };
 
-} /* namespace minifi */
-} /* namespace nifi */
-} /* namespace apache */
-} /* namespace org */
-#endif
+}  // namespace minifi
+}  // namespace nifi
+}  // namespace apache
+}  // namespace org
+#endif  // LIBMINIFI_INCLUDE_PROPERTIES_PROPERTIES_H_

@@ -40,6 +40,17 @@ extern "C" {
 #define SUCCESS_RELATIONSHIP "success"
 #define FAILURE_RELATIONSHIP "failure"
 
+#define NULL_CHECK(ret_val, ...)                        \
+  do {                                                  \
+    const void *_p[] = { __VA_ARGS__ };                 \
+    int _i;                                             \
+    for (_i = 0; _i < sizeof(_p)/sizeof(*_p); _i++) {   \
+      if (_p[_i] == NULL) {                             \
+        return ret_val;                                 \
+      }                                                 \
+    }                                                   \
+  } while(0)
+
 /**
  * Enables logging (disabled by default)
  **/
@@ -57,13 +68,17 @@ void set_terminate_callback(void (*terminate_callback)());
  * ##################################################################
  */
 
+nifi_instance *create_instance_repo(const char *url, nifi_port *port, const char* const repo_type);
+
 /**
  * Creates a new MiNiFi instance
  * @param url remote URL the instance connects to
  * @param port remote port the instance connects to
  * @return pointer to the new instance
  **/
-nifi_instance *create_instance(const char *url, nifi_port *port);
+static nifi_instance *create_instance(const char *url, nifi_port *port){
+  return create_instance_repo(url, port, "filesystemrepository");
+}
 
 /**
  * Initialize remote connection of instance for transfers
@@ -111,7 +126,7 @@ flow *create_new_flow(nifi_instance * instance);
  * @attention in case first processor is empty or doesn't name any existing processor, an empty flow is returned.
  * @return a pointer to the created flow
  **/
-DEPRECATED flow *create_flow(nifi_instance * instance, const char * first_processor);
+DEPRECATED(0.6.0,2.0) flow *create_flow(nifi_instance * instance, const char * first_processor);
 
 /**
  * Add a getfile processor to "parent" flow.
@@ -139,7 +154,7 @@ processor *add_python_processor(flow *, processor_logic* logic);
  * @param name the name of the processor to instanciate
  * @return pointer to the new processor or nullptr in case it cannot be instantiated (wrong name?)
  **/
-standalone_processor *create_processor(const char * name);
+standalone_processor *create_processor(const char * name, nifi_instance * instance);
 
 /**
  * Free a standalone processor
@@ -262,7 +277,7 @@ flow_file_record *invoke_file(standalone_processor* proc, const char* path);
  **/
 flow_file_record *invoke_chunk(standalone_processor *proc, uint8_t *buf, uint64_t size);
 
-int transfer(processor_session* session, flow *flow, const char *rel);
+DEPRECATED(0.6.0, 2.0) int transfer(processor_session* session, flow *flow, const char *rel);
 
 /**
  * Creates a flow file record based on a file
@@ -297,6 +312,21 @@ flow_file_record* create_ff_object_na(const char *file, const size_t len, const 
  * @return a flow file record or nullptr in case no flowfile was generated
  */
 flow_file_record* create_ff_object_nc();
+
+/**
+ * Adds content to the flow file record.
+ * @param instance the nifi instance
+ * @param proc the standalone processor
+ * @return a flow file record
+ */
+flow_file_record* generate_flow_file(nifi_instance * instance, standalone_processor * proc);
+
+/**
+ * Adds content to the flow file record.
+ * @param ctx the processor context
+ * @return a flow file record
+ */
+flow_file_record * generate_flow(processor_context * ctx);
 
 /**
  * Get incoming flow file. To be used in processor logic callbacks.
@@ -379,13 +409,31 @@ int8_t remove_attribute(flow_file_record*, const char * key);
 
 int transmit_flowfile(flow_file_record *, nifi_instance *);
 
+
+/****
+ * ##################################################################
+ *  API functions for user-defined processor
+ * ##################################################################
+ */
+
+typedef struct {
+  const char * name;
+  ontrigger_callback * ontr_cb;
+  onschedule_callback * onsc_cb;
+} custom_processor_args;
+
+
 /**
  * Adds a custom processor for later instantiation
  * @param name name of the processor
- * @param logic the callback to be invoked when the processor is triggered
+ * @param in the name and the callbacks used for the processor
+ * @attention it's recommended to use this function via the variadic arg macro: the caller doesn't need to create the
+ * parameter struct and callback arguments can be optional.
  * @return 0 on success, -1 otherwise (name already in use for eg.)
  **/
-int add_custom_processor(const char * name, processor_logic* logic);
+int var_add_custom_processor(custom_processor_args in);
+
+#define add_custom_processor(...) var_add_custom_processor((custom_processor_args){__VA_ARGS__});
 
 /**
  * Removes a custom processor
@@ -403,6 +451,35 @@ int delete_custom_processor(const char * name);
  * @return 0 on success, -1 otherwise (didn't exist)
  **/
 int transfer_to_relationship(flow_file_record * ffr, processor_session * ps, const char * relationship);
+
+/**
+ * Write content to a flow file and return a pointer to flow file record
+ * @param buff, the buffer to read content from
+ * @param count the number of bytes to read
+ * @param ctx the processor context
+ */
+flow_file_record * write_to_flow(const char * buff, size_t count, processor_context * ctx);
+
+/**
+ * Initialize content repository
+ * @param ctx the processor context
+ */
+void initialize_content_repo(processor_context * ctx, const char * uuid);
+
+/**
+ * Clear content repository contents
+ */
+void clear_content_repo(const nifi_instance * instance);
+
+/**
+ * Get the processor uuid from processor context
+ */
+void get_proc_uuid_from_context(const processor_context * ctx, char * uuid_target);
+
+/**
+ * Get the processor uuid from processor
+ */
+void get_proc_uuid_from_processor(standalone_processor * proc, char * uuid_target);
 
 /****
  * ##################################################################

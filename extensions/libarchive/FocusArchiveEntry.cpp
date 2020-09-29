@@ -159,7 +159,7 @@ typedef struct {
 } FocusArchiveEntryReadData;
 
 // Read callback which reads from the flowfile stream
-ssize_t FocusArchiveEntry::ReadCallback::read_cb(struct archive * a, void *d, const void **buf) {
+la_ssize_t FocusArchiveEntry::ReadCallback::read_cb(struct archive * a, void *d, const void **buf) {
   auto data = static_cast<FocusArchiveEntryReadData *>(d);
   *buf = data->buf;
   int64_t read = 0;
@@ -266,8 +266,7 @@ FocusArchiveEntry::ReadCallback::ReadCallback(core::Processor *processor, fileut
   _archiveMetadata = archiveMetadata;
 }
 
-FocusArchiveEntry::ReadCallback::~ReadCallback() {
-}
+FocusArchiveEntry::ReadCallback::~ReadCallback() = default;
 
 } /* namespace processors */
 } /* namespace minifi */

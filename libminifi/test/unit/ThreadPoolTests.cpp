@@ -38,17 +38,16 @@ class WorkerNumberExecutions : public utils::AfterExecute<int> {
         tasks(std::move(other.tasks)) {
   }
 
-  ~WorkerNumberExecutions() {
-  }
+  ~WorkerNumberExecutions() = default;
 
-  virtual bool isFinished(const int &result) {
+  bool isFinished(const int &result) override {
     if (result > 0 && ++runs < tasks) {
       return false;
     } else {
       return true;
     }
   }
-  virtual bool isCancelled(const int &result) {
+  bool isCancelled(const int &result) override {
     return false;
   }
 
@@ -56,9 +55,9 @@ class WorkerNumberExecutions : public utils::AfterExecute<int> {
     return runs;
   }
 
-  virtual int64_t wait_time() {
+  std::chrono::milliseconds wait_time() override {
     // wait 50ms
-    return 50;
+    return std::chrono::milliseconds(50);
   }
 
  protected:

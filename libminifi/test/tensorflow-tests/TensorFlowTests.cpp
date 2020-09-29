@@ -19,14 +19,14 @@
 #include <memory>
 #include <string>
 
-#include <tensorflow/cc/framework/scope.h>
-#include <tensorflow/cc/ops/standard_ops.h>
-#include <processors/PutFile.h>
-#include <processors/GetFile.h>
-#include <processors/LogAttribute.h>
+#include "processors/GetFile.h"
+#include "processors/LogAttribute.h"
+#include "processors/PutFile.h"
+#include "tensorflow/cc/framework/scope.h"
+#include "tensorflow/cc/ops/standard_ops.h"
+#include "TFApplyGraph.h"
 #include <TFConvertImageToTensor.h>
 #include <TFExtractTopLabels.h>
-#include "TFApplyGraph.h"
 
 #define CATCH_CONFIG_MAIN
 

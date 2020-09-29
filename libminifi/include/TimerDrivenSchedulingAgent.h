@@ -17,8 +17,10 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#ifndef __TIMER_DRIVEN_SCHEDULING_AGENT_H__
-#define __TIMER_DRIVEN_SCHEDULING_AGENT_H__
+#ifndef LIBMINIFI_INCLUDE_TIMERDRIVENSCHEDULINGAGENT_H_
+#define LIBMINIFI_INCLUDE_TIMERDRIVENSCHEDULINGAGENT_H_
+
+#include <memory>
 
 #include "core/logging/Logger.h"
 #include "core/Processor.h"
@@ -38,17 +40,17 @@ class TimerDrivenSchedulingAgent : public ThreadedSchedulingAgent {
    * Create a new processor
    */
   TimerDrivenSchedulingAgent(std::shared_ptr<core::controller::ControllerServiceProvider> controller_service_provider, std::shared_ptr<core::Repository> repo,
-                             std::shared_ptr<core::Repository> flow_repo, std::shared_ptr<core::ContentRepository> content_repo, std::shared_ptr<Configure> configure)
-      : ThreadedSchedulingAgent(controller_service_provider, repo, flow_repo, content_repo, configure),
+                             std::shared_ptr<core::Repository> flow_repo, std::shared_ptr<core::ContentRepository> content_repo, std::shared_ptr<Configure> configure,
+                             utils::ThreadPool<utils::TaskRescheduleInfo> &thread_pool)
+      : ThreadedSchedulingAgent(controller_service_provider, repo, flow_repo, content_repo, configure, thread_pool),
         logger_(logging::LoggerFactory<TimerDrivenSchedulingAgent>::getLogger()) {
   }
-  //  Destructor
-  virtual ~TimerDrivenSchedulingAgent() {
-  }
+
   /**
    * Run function that accepts the processor, context and session factory.
    */
-  uint64_t run(const std::shared_ptr<core::Processor> &processor, const std::shared_ptr<core::ProcessContext> &processContext, const std::shared_ptr<core::ProcessSessionFactory> &sessionFactory);
+  utils::TaskRescheduleInfo run(const std::shared_ptr<core::Processor> &processor, const std::shared_ptr<core::ProcessContext> &processContext,
+      const std::shared_ptr<core::ProcessSessionFactory> &sessionFactory) override;
 
  private:
   // Prevent default copy constructor and assignment operation
@@ -59,8 +61,8 @@ class TimerDrivenSchedulingAgent : public ThreadedSchedulingAgent {
   std::shared_ptr<logging::Logger> logger_;
 };
 
-} /* namespace minifi */
-} /* namespace nifi */
-} /* namespace apache */
-} /* namespace org */
-#endif
+}  // namespace minifi
+}  // namespace nifi
+}  // namespace apache
+}  // namespace org
+#endif  // LIBMINIFI_INCLUDE_TIMERDRIVENSCHEDULINGAGENT_H_

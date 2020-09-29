@@ -19,7 +19,6 @@
 #include "ExecuteJavaControllerService.h"
 
 #include <regex>
-#include <uuid/uuid.h>
 #include <memory>
 #include <algorithm>
 #include <cctype>
@@ -70,8 +69,7 @@ void ExecuteJavaControllerService::initialize() {
 
 }
 
-ExecuteJavaControllerService::~ExecuteJavaControllerService() {
-}
+ExecuteJavaControllerService::~ExecuteJavaControllerService() = default;
 
 void ExecuteJavaControllerService::onEnable() {
   std::string controller_service_name;
@@ -97,10 +95,12 @@ void ExecuteJavaControllerService::onEnable() {
 
   clazzInstance = java_servicer_->newInstance(class_name_);
 
-  auto onEnabledName = java_servicer_->getAnnotation(class_name_, "OnEnabled");
+  auto methods_with_signatures = java_servicer_->getAnnotations(class_name_, "OnEnabled");
   current_cs_class = java_servicer_->getObjectClass(class_name_, clazzInstance);
   try {
-    current_cs_class.callVoidMethod(env, clazzInstance, onEnabledName.first.c_str(), onEnabledName.second, contextInstance);
+    for (const auto &mwithsig : methods_with_signatures) {
+      current_cs_class.callVoidMethod(env, clazzInstance, mwithsig.first, mwithsig.second, contextInstance);
+    }
   } catch (std::runtime_error &re) {
     // this can be ignored.
   }

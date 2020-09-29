@@ -18,11 +18,15 @@
 #ifndef LIBMINIFI_INCLUDE_CORE_PROPERTYVALIDATION_H_
 #define LIBMINIFI_INCLUDE_CORE_PROPERTYVALIDATION_H_
 
+#include <limits>
+#include <memory>
+#include <string>
+#include <utility>
+
 #include "core/Core.h"
 #include "core/state/Value.h"
 #include "TypedValues.h"
 #include "utils/StringUtils.h"
-#include <memory>
 
 namespace org {
 namespace apache {
@@ -61,18 +65,18 @@ class ValidationResult {
     }
 
    protected:
-    bool valid_;
+    bool valid_{ false };
     std::string subject_;
     std::string input_;
     friend class ValidationResult;
   };
- private:
 
+ private:
   bool valid_;
   std::string subject_;
   std::string input_;
 
-  ValidationResult(const Builder &builder)
+  ValidationResult(const Builder &builder) // NOLINT
       : valid_(builder.valid_),
         subject_(builder.subject_),
         input_(builder.input_) {
@@ -83,13 +87,10 @@ class ValidationResult {
 
 class PropertyValidator {
  public:
-
-  PropertyValidator(const std::string &name)
-      : name_(name) {
+  PropertyValidator(std::string name) // NOLINT
+      : name_(std::move(name)) {
   }
-  virtual ~PropertyValidator() {
-
-  }
+  virtual ~PropertyValidator() = default;
 
   std::string getName() const {
     return name_;
@@ -109,7 +110,6 @@ class PropertyValidator {
       vn = input->getStringValue();
       return validate(subject, input->getStringValue());
     }
-
   }
 
   std::string name_;
@@ -119,36 +119,34 @@ class AlwaysValid : public PropertyValidator {
   bool always_valid_;
  public:
   AlwaysValid(bool isalwaysvalid, const std::string &name)
-      : always_valid_(isalwaysvalid),
-        PropertyValidator(name) {
+      : PropertyValidator(name),
+        always_valid_(isalwaysvalid) {
+  }
 
-  }
-  virtual ~AlwaysValid() {
-  }
-  ValidationResult validate(const std::string &subject, const std::shared_ptr<minifi::state::response::Value> &input) const {
+  ~AlwaysValid() override = default;
+
+  ValidationResult validate(const std::string &subject, const std::shared_ptr<minifi::state::response::Value> &input) const override {
     return ValidationResult::Builder::createBuilder().withSubject(subject).withInput(input->getStringValue()).isValid(always_valid_).build();
   }
 
-  ValidationResult validate(const std::string &subject, const std::string &input) const {
+  ValidationResult validate(const std::string &subject, const std::string &input) const override {
     return ValidationResult::Builder::createBuilder().withSubject(subject).withInput(input).isValid(always_valid_).build();
   }
-
 };
 
 class BooleanValidator : public PropertyValidator {
  public:
-  BooleanValidator(const std::string &name)
+  BooleanValidator(const std::string &name) // NOLINT
       : PropertyValidator(name) {
   }
-  virtual ~BooleanValidator() {
 
-  }
+  ~BooleanValidator() override = default;
 
-  ValidationResult validate(const std::string &subject, const std::shared_ptr<minifi::state::response::Value> &input) const {
+  ValidationResult validate(const std::string &subject, const std::shared_ptr<minifi::state::response::Value> &input) const override {
     return PropertyValidator::_validate_internal<minifi::state::response::BoolValue>(subject, input);
   }
 
-  ValidationResult validate(const std::string &subject, const std::string &input) const {
+  ValidationResult validate(const std::string &subject, const std::string &input) const override {
     if (utils::StringUtils::equalsIgnoreCase(input, "true") || utils::StringUtils::equalsIgnoreCase(input, "false"))
       return ValidationResult::Builder::createBuilder().withSubject(subject).withInput(input).isValid(true).build();
     else
@@ -158,22 +156,45 @@ class BooleanValidator : public PropertyValidator {
 
 class IntegerValidator : public PropertyValidator {
  public:
-  IntegerValidator(const std::string &name)
+  IntegerValidator(const std::string &name) // NOLINT
       : PropertyValidator(name) {
   }
-  virtual ~IntegerValidator() {
-  }
+  ~IntegerValidator() override = default;
 
-  ValidationResult validate(const std::string &subject, const std::shared_ptr<minifi::state::response::Value> &input) const {
+  ValidationResult validate(const std::string &subject, const std::shared_ptr<minifi::state::response::Value> &input) const override {
     return PropertyValidator::_validate_internal<minifi::state::response::IntValue>(subject, input);
   }
 
-  ValidationResult validate(const std::string &subject, const std::string &input) const {
+  ValidationResult validate(const std::string &subject, const std::string &input) const override {
     try {
       std::stoi(input);
       return ValidationResult::Builder::createBuilder().withSubject(subject).withInput(input).isValid(true).build();
     } catch (...) {
+    }
+    return ValidationResult::Builder::createBuilder().withSubject(subject).withInput(input).isValid(false).build();
+  }
+};
 
+class UnsignedIntValidator : public PropertyValidator {
+ public:
+  explicit UnsignedIntValidator(const std::string &name)
+      : PropertyValidator(name) {
+  }
+  ~UnsignedIntValidator() override = default;
+
+  ValidationResult validate(const std::string &subject, const std::shared_ptr<minifi::state::response::Value> &input) const override {
+    return PropertyValidator::_validate_internal<minifi::state::response::UInt32Value>(subject, input);
+  }
+
+  ValidationResult validate(const std::string &subject, const std::string &input) const override {
+    try {
+      auto negative = input.find_first_of('-') != std::string::npos;
+      if (negative) {
+        throw std::out_of_range("non negative expected");
+      }
+      std::stoul(input);
+      return ValidationResult::Builder::createBuilder().withSubject(subject).withInput(input).isValid(true).build();
+    } catch (...) {
     }
     return ValidationResult::Builder::createBuilder().withSubject(subject).withInput(input).isValid(false).build();
   }
@@ -186,10 +207,9 @@ class LongValidator : public PropertyValidator {
         min_(min),
         max_(max) {
   }
-  virtual ~LongValidator() {
+  ~LongValidator() override = default;
 
-  }
-  ValidationResult validate(const std::string &subject, const std::shared_ptr<minifi::state::response::Value> &input) const {
+  ValidationResult validate(const std::string &subject, const std::shared_ptr<minifi::state::response::Value> &input) const override {
     auto in64 = std::dynamic_pointer_cast<minifi::state::response::Int64Value>(input);
     if (in64) {
       return ValidationResult::Builder::createBuilder().withSubject(subject).withInput(in64->getStringValue()).isValid(in64->getValue() >= min_ && in64->getValue() <= max_).build();
@@ -199,13 +219,12 @@ class LongValidator : public PropertyValidator {
     }
   }
 
-  ValidationResult validate(const std::string &subject, const std::string &input) const {
+  ValidationResult validate(const std::string &subject, const std::string &input) const override {
     try {
       auto res = std::stoll(input);
 
       return ValidationResult::Builder::createBuilder().withSubject(subject).withInput(input).isValid(res >= min_ && res <= max_).build();
     } catch (...) {
-
     }
     return ValidationResult::Builder::createBuilder().withSubject(subject).withInput(input).isValid(false).build();
   }
@@ -220,75 +239,75 @@ class UnsignedLongValidator : public PropertyValidator {
   explicit UnsignedLongValidator(const std::string &name)
       : PropertyValidator(name) {
   }
-  virtual ~UnsignedLongValidator() {
+  ~UnsignedLongValidator() override = default;
 
-  }
-  ValidationResult validate(const std::string &subject, const std::shared_ptr<minifi::state::response::Value> &input) const {
+  ValidationResult validate(const std::string &subject, const std::shared_ptr<minifi::state::response::Value> &input) const override {
     return PropertyValidator::_validate_internal<minifi::state::response::UInt64Value>(subject, input);
   }
 
-  ValidationResult validate(const std::string &subject, const std::string &input) const {
+  ValidationResult validate(const std::string &subject, const std::string &input) const override {
     try {
+      auto negative = input.find_first_of('-') != std::string::npos;
+      if (negative) {
+        throw std::out_of_range("non negative expected");
+      }
       std::stoull(input);
       return ValidationResult::Builder::createBuilder().withSubject(subject).withInput(input).isValid(true).build();
     } catch (...) {
-
     }
     return ValidationResult::Builder::createBuilder().withSubject(subject).withInput(input).isValid(false).build();
   }
-
 };
 
 class DataSizeValidator : public PropertyValidator {
  public:
-  DataSizeValidator(const std::string &name)
+  DataSizeValidator(const std::string &name) // NOLINT
       : PropertyValidator(name) {
   }
-  virtual ~DataSizeValidator() {
+  ~DataSizeValidator() override = default;
 
-  }
-  ValidationResult validate(const std::string &subject, const std::shared_ptr<minifi::state::response::Value> &input) const {
+  ValidationResult validate(const std::string &subject, const std::shared_ptr<minifi::state::response::Value> &input) const override {
     return PropertyValidator::_validate_internal<core::DataSizeValue>(subject, input);
   }
 
-  ValidationResult validate(const std::string &subject, const std::string &input) const {
+  ValidationResult validate(const std::string &subject, const std::string &input) const override {
     uint64_t out;
-    if (core::DataSizeValue::StringToInt(input, out))
-      return ValidationResult::Builder::createBuilder().withSubject(subject).withInput(input).isValid(true).build();
-    else
-      return ValidationResult::Builder::createBuilder().withSubject(subject).withInput(input).isValid(false).build();
+    return ValidationResult::Builder::createBuilder().withSubject(subject).withInput(input).isValid(core::DataSizeValue::StringToInt(input, out)).build();
   }
 };
 
 class PortValidator : public LongValidator {
  public:
-  PortValidator(const std::string &name)
+  PortValidator(const std::string &name) // NOLINT
       : LongValidator(name, 1, 65535) {
   }
-  virtual ~PortValidator() {
+  ~PortValidator() override = default;
+};
 
+// Use only for specifying listen ports, where 0 means a randomly chosen one!
+class ListenPortValidator : public LongValidator {
+ public:
+  ListenPortValidator(const std::string &name) // NOLINT
+    : LongValidator(name, 0, 65535) {
   }
+  ~ListenPortValidator() override = default;
 };
 
 class TimePeriodValidator : public PropertyValidator {
  public:
-  TimePeriodValidator(const std::string &name)
+  TimePeriodValidator(const std::string &name) // NOLINT
       : PropertyValidator(name) {
   }
-  virtual ~TimePeriodValidator() {
+  ~TimePeriodValidator() override = default;
 
-  }
-  ValidationResult validate(const std::string &subject, const std::shared_ptr<minifi::state::response::Value> &input) const {
+  ValidationResult validate(const std::string &subject, const std::shared_ptr<minifi::state::response::Value> &input) const override {
     return PropertyValidator::_validate_internal<core::TimePeriodValue>(subject, input);
   }
 
-  ValidationResult validate(const std::string &subject, const std::string &input) const {
+  ValidationResult validate(const std::string &subject, const std::string &input) const override {
     uint64_t out;
     TimeUnit outTimeUnit;
-    if (core::TimePeriodValue::StringToTime(input, out, outTimeUnit))
-      return ValidationResult::Builder::createBuilder().withSubject(subject).withInput(input).isValid(true).build();
-    else
-      return ValidationResult::Builder::createBuilder().withSubject(subject).withInput(input).isValid(false).build();
+    return ValidationResult::Builder::createBuilder().withSubject(subject).withInput(input).isValid(core::TimePeriodValue::StringToTime(input, out, outTimeUnit)).build();
   }
 };
 
@@ -296,52 +315,59 @@ class TimePeriodValidator : public PropertyValidator {
 
 class StandardValidators {
  public:
-
-  static std::shared_ptr<PropertyValidator> VALID;
-
-  static const std::shared_ptr<PropertyValidator> &getValidator(const std::shared_ptr<minifi::state::response::Value> &input) {
+  static const gsl::not_null<std::shared_ptr<PropertyValidator>> &getValidator(const std::shared_ptr<minifi::state::response::Value> &input) {
     static StandardValidators init;
     if (std::dynamic_pointer_cast<core::DataSizeValue>(input) != nullptr) {
       return init.DATA_SIZE_VALIDATOR;
     } else if (std::dynamic_pointer_cast<core::TimePeriodValue>(input) != nullptr) {
       return init.TIME_PERIOD_VALIDATOR;
-    } else if (std::dynamic_pointer_cast<core::DataSizeValue>(input) != nullptr) {
-      return init.DATA_SIZE_VALIDATOR;
     } else if (std::dynamic_pointer_cast<minifi::state::response::BoolValue>(input) != nullptr) {
       return init.BOOLEAN_VALIDATOR;
     } else if (std::dynamic_pointer_cast<minifi::state::response::IntValue>(input) != nullptr) {
       return init.INTEGER_VALIDATOR;
+    } else if (std::dynamic_pointer_cast<minifi::state::response::UInt32Value>(input) != nullptr) {
+      return init.UNSIGNED_INT_VALIDATOR;;
     } else if (std::dynamic_pointer_cast<minifi::state::response::Int64Value>(input) != nullptr) {
       return init.LONG_VALIDATOR;
     } else if (std::dynamic_pointer_cast<minifi::state::response::UInt64Value>(input) != nullptr) {
       return init.UNSIGNED_LONG_VALIDATOR;
     } else {
-      return init.VALID;
+      return org::apache::nifi::minifi::core::StandardValidators::VALID_VALIDATOR();
     }
   }
 
-  static const std::shared_ptr<PropertyValidator> PORT_VALIDATOR(){
-    static std::shared_ptr<PropertyValidator> validator = std::make_shared<PortValidator>("PORT_VALIDATOR");
+  static const gsl::not_null<std::shared_ptr<PropertyValidator>>& VALID_VALIDATOR() {
+    static gsl::not_null<std::shared_ptr<PropertyValidator>> validator(std::make_shared<AlwaysValid>(true, "VALID"));
+    return validator;
+  }
+
+  static gsl::not_null<std::shared_ptr<PropertyValidator>> PORT_VALIDATOR() {
+    static gsl::not_null<std::shared_ptr<PropertyValidator>> validator(std::make_shared<PortValidator>("PORT_VALIDATOR"));
+    return validator;
+  }
+
+  static gsl::not_null<std::shared_ptr<PropertyValidator>> LISTEN_PORT_VALIDATOR() {
+    static gsl::not_null<std::shared_ptr<PropertyValidator>> validator(std::make_shared<ListenPortValidator>("PORT_VALIDATOR"));
     return validator;
   }
 
  private:
-  std::shared_ptr<PropertyValidator> INVALID;
-  std::shared_ptr<PropertyValidator> INTEGER_VALIDATOR;
-  std::shared_ptr<PropertyValidator> LONG_VALIDATOR;
-  std::shared_ptr<PropertyValidator> UNSIGNED_LONG_VALIDATOR;
-  std::shared_ptr<PropertyValidator> BOOLEAN_VALIDATOR;
-  std::shared_ptr<PropertyValidator> DATA_SIZE_VALIDATOR;
-  std::shared_ptr<PropertyValidator> TIME_PERIOD_VALIDATOR;
+  gsl::not_null<std::shared_ptr<PropertyValidator>> INVALID;
+  gsl::not_null<std::shared_ptr<PropertyValidator>> INTEGER_VALIDATOR;
+  gsl::not_null<std::shared_ptr<PropertyValidator>> UNSIGNED_INT_VALIDATOR;
+  gsl::not_null<std::shared_ptr<PropertyValidator>> LONG_VALIDATOR;
+  gsl::not_null<std::shared_ptr<PropertyValidator>> UNSIGNED_LONG_VALIDATOR;
+  gsl::not_null<std::shared_ptr<PropertyValidator>> BOOLEAN_VALIDATOR;
+  gsl::not_null<std::shared_ptr<PropertyValidator>> DATA_SIZE_VALIDATOR;
+  gsl::not_null<std::shared_ptr<PropertyValidator>> TIME_PERIOD_VALIDATOR;
 
   StandardValidators();
-}
-;
+};
 
-} /* namespace core */
-} /* namespace minifi */
-} /* namespace nifi */
-} /* namespace apache */
-} /* namespace org */
+}  // namespace core
+}  // namespace minifi
+}  // namespace nifi
+}  // namespace apache
+}  // namespace org
 
-#endif /* LIBMINIFI_INCLUDE_CORE_PROPERTYVALIDATION_H_ */
+#endif  // LIBMINIFI_INCLUDE_CORE_PROPERTYVALIDATION_H_

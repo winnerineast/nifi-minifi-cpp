@@ -16,15 +16,15 @@
  * limitations under the License.
  */
 
-#include <uuid/uuid.h>
-#include <string>
-#include <memory>
-#include <utility>
+#include <algorithm>
 #include <map>
+#include <memory>
+#include <string>
+#include <utility>
+
 #include "io/BaseStream.h"
 #include "sitetosite/Peer.h"
 #include "sitetosite/RawSocketProtocol.h"
-#include <algorithm>
 #include "../TestBase.h"
 #include "../unit/SiteToSiteHelper.h"
 

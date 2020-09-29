@@ -15,9 +15,10 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#ifndef LIBMINIFI_INCLUDE_METRICS_METRICSBASE_H_
-#define LIBMINIFI_INCLUDE_METRICS_METRICSBASE_H_
+#ifndef LIBMINIFI_INCLUDE_CORE_STATE_NODES_METRICSBASE_H_
+#define LIBMINIFI_INCLUDE_CORE_STATE_NODES_METRICSBASE_H_
 
+#include <utility>
 #include <vector>
 #include <memory>
 #include <string>
@@ -43,18 +44,16 @@ class ResponseNode : public core::Connectable {
         is_array_(false) {
   }
 
-  ResponseNode(std::string name)
+  ResponseNode(const std::string& name) // NOLINT
       : core::Connectable(name),
         is_array_(false) {
   }
 
-  ResponseNode(std::string name, utils::Identifier & uuid)
+  ResponseNode(const std::string& name, utils::Identifier & uuid)
       : core::Connectable(name, uuid),
         is_array_(false) {
   }
-  virtual ~ResponseNode() {
-
-  }
+  virtual ~ResponseNode() = default;
 
   virtual std::vector<SerializedResponseNode> serialize() = 0;
 
@@ -76,13 +75,11 @@ class ResponseNode : public core::Connectable {
   }
 
  protected:
-
   bool is_array_;
 
   void setArray(bool array) {
     is_array_ = array;
   }
-
 };
 
 /**
@@ -90,10 +87,10 @@ class ResponseNode : public core::Connectable {
  */
 class DeviceInformation : public ResponseNode {
  public:
-  DeviceInformation(std::string name, utils::Identifier & uuid)
+  DeviceInformation(const std::string& name, utils::Identifier & uuid)
       : ResponseNode(name, uuid) {
   }
-  DeviceInformation(std::string name)
+  DeviceInformation(const std::string& name) // NOLINT
       : ResponseNode(name) {
   }
 };
@@ -103,7 +100,7 @@ class DeviceInformation : public ResponseNode {
  */
 class ObjectNode : public ResponseNode {
  public:
-  ObjectNode(std::string name, utils::Identifier uuid = utils::Identifier())
+  ObjectNode(std::string name, utils::Identifier uuid = utils::Identifier()) // NOLINT
       : ResponseNode(name, uuid) {
   }
 
@@ -127,7 +124,7 @@ class ObjectNode : public ResponseNode {
       }
       serialized.push_back(std::move(inner_node));
     }
-    //serialized.push_back(std::move(outer_node));
+    // serialized.push_back(std::move(outer_node));
     return serialized;
   }
 
@@ -137,7 +134,6 @@ class ObjectNode : public ResponseNode {
 
  protected:
   std::vector<std::shared_ptr<ResponseNode>> nodes_;
-
 };
 
 /**
@@ -146,13 +142,9 @@ class ObjectNode : public ResponseNode {
  */
 class ResponseNodeSource {
  public:
+  ResponseNodeSource() = default;
 
-  ResponseNodeSource() {
-
-  }
-
-  virtual ~ResponseNodeSource() {
-  }
+  virtual ~ResponseNodeSource() = default;
 
   /**
    * Retrieves all metrics from this source.
@@ -165,7 +157,6 @@ class ResponseNodeSource {
   virtual int16_t getResponseNodes(std::vector<std::shared_ptr<ResponseNode>> &metric_vector) = 0;
 
   virtual int16_t getMetricNodes(std::vector<std::shared_ptr<ResponseNode>> &metric_vector) = 0;
-
 };
 
 /**
@@ -174,13 +165,9 @@ class ResponseNodeSource {
  */
 class MetricsNodeSource : public ResponseNodeSource {
  public:
+  MetricsNodeSource() = default;
 
-  MetricsNodeSource() {
-
-  }
-
-  virtual ~MetricsNodeSource() {
-  }
+  virtual ~MetricsNodeSource() = default;
 
   /**
    * Retrieves all metrics from this source.
@@ -195,39 +182,32 @@ class MetricsNodeSource : public ResponseNodeSource {
   }
 
   virtual int16_t getMetricNodes(std::vector<std::shared_ptr<ResponseNode>> &metric_vector) = 0;
-
 };
 
 class NodeReporter {
  public:
+  NodeReporter() = default;
 
-  NodeReporter() {
-
-  }
-
-  virtual ~NodeReporter() {
-  }
+  virtual ~NodeReporter() = default;
 
   /**
-   * Retrieves all root response nodes from this source.
-   * @param metric_vector -- metrics will be placed in this vector.
-   * @return result of the get operation.
-   *  0 Success
-   *  1 No error condition, but cannot obtain lock in timely manner.
-   *  -1 failure
+   * Retrieves metrics node
+   * @return metrics response node
    */
-  virtual int16_t getResponseNodes(std::vector<std::shared_ptr<ResponseNode>> &metric_vector, uint16_t metricsClass) = 0;
+  virtual std::shared_ptr<ResponseNode> getMetricsNode(const std::string& metricsClass) const = 0;
 
   /**
-   * Retrieves all metrics from this source.
-   * @param metric_vector -- metrics will be placed in this vector.
-   * @return result of the get operation.
-   *  0 Success
-   *  1 No error condition, but cannot obtain lock in timely manner.
-   *  -1 failure
+   * Retrieves root nodes configured to be included in heartbeat
+   * @param includeManifest -- determines if manifest is to be included
+   * @return a list of response nodes
    */
-  virtual int16_t getMetricsNodes(std::vector<std::shared_ptr<ResponseNode>> &metric_vector, uint16_t metricsClass) = 0;
+  virtual std::vector<std::shared_ptr<ResponseNode>> getHeartbeatNodes(bool includeManifest) const = 0;
 
+  /**
+   * Retrieves the agent manifest to be sent as a response to C2 DESCRIBE manifest
+   * @return the agent manifest response node
+   */
+  virtual std::shared_ptr<state::response::ResponseNode> getAgentManifest() const = 0;
 };
 
 /**
@@ -236,9 +216,7 @@ class NodeReporter {
  */
 class ResponseNodeSink {
  public:
-
-  virtual ~ResponseNodeSink() {
-  }
+  virtual ~ResponseNodeSink() = default;
   /**
    * Setter for nodes in this sink.
    * @param metrics metrics to insert into the current sink.
@@ -257,14 +235,14 @@ class ResponseNodeSink {
    *  1 No error condition, but cannot obtain lock in timely manner.
    *  -1 failure
    */
-//  virtual int16_t setMetricsNodes(const std::shared_ptr<ResponseNode> &metrics) = 0;
+  virtual int16_t setMetricsNodes(const std::shared_ptr<ResponseNode> &metrics) = 0;
 };
 
-} /* namespace metrics */
-} /* namespace state */
-} /* namespace minifi */
-} /* namespace nifi */
-} /* namespace apache */
-} /* namespace org */
+}  // namespace response
+}  // namespace state
+}  // namespace minifi
+}  // namespace nifi
+}  // namespace apache
+}  // namespace org
 
-#endif /* LIBMINIFI_INCLUDE_C2_METRICS_METRICSBASE_H_ */
+#endif  // LIBMINIFI_INCLUDE_CORE_STATE_NODES_METRICSBASE_H_

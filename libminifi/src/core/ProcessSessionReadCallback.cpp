@@ -18,10 +18,11 @@
  * limitations under the License.
  */
 #include "core/ProcessSessionReadCallback.h"
-#include "core/logging/LoggerConfiguration.h"
-#include "io/BaseStream.h"
 #include <memory>
 #include <string>
+
+#include "core/logging/LoggerConfiguration.h"
+#include "io/BaseStream.h"
 
 namespace org {
 namespace apache {
@@ -90,8 +91,8 @@ ProcessSessionReadCallback::~ProcessSessionReadCallback() {
   unlink(_tmpFile.c_str());
 }
 
-} /* namespace core */
-} /* namespace minifi */
-} /* namespace nifi */
-} /* namespace apache */
-} /* namespace org */
+}  // namespace core
+}  // namespace minifi
+}  // namespace nifi
+}  // namespace apache
+}  // namespace org

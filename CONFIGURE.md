@@ -18,15 +18,18 @@
 ## Configuring
 The 'conf' directory in the root contains a template config.yml document.  
 
-This is compatible with the format used with the Java MiNiFi application.  Currently, a subset of the configuration is supported and MiNiFi C++ is currently compatible with version 1 of the MiNiFi YAML schema.
+This is partly compatible with the format used with the Java MiNiFi application. MiNiFi C++ is currently compatible with version 1 of the MiNiFi YAML schema.
 Additional information on the YAML format for the config.yml and schema versioning can be found in the [MiNiFi System Administrator Guide](https://nifi.apache.org/minifi/system-admin-guide.html).
 
-Additionally, users can utilize the MiNiFi Toolkit Converter (version 0.0.1 - schema version 1) to aid in creating a flow configuration from a generated template exported from a NiFi instance.  The MiNiFi Toolkit Converter tool can be downloaded from http://nifi.apache.org/minifi/download.html under the `MiNiFi Toolkit Binaries` section.  Information on its usage is available at https://nifi.apache.org/minifi/minifi-toolkit.html.
+MiNiFi Toolkit Converter (version 0.0.1 - schema version 1) is considered as deprecated from MiNiFi C++ 0.7.0. It was to aid in creating a flow configuration from a generated template exported from a NiFi instance. The MiNiFi Toolkit Converter tool can be downloaded from http://nifi.apache.org/minifi/download.html under the `MiNiFi Toolkit Binaries` section.  Information on its usage is available at https://nifi.apache.org/minifi/minifi-toolkit.html. Using the toolkit is no longer supported and maintained.
+
+It's recommended to create your configuration in YAML format or configure the agent via Command and Control protocol (see below)
 
 
     Flow Controller:
         id: 471deef6-2a6e-4a7d-912a-81cc17e3a205
         name: MiNiFi Flow
+        onschedule retry interval: 30000 ms
 
     Processors:
         - name: GetFile
@@ -53,6 +56,7 @@ Additionally, users can utilize the MiNiFi Toolkit Converter (version 0.0.1 - sc
           max work queue size: 0
           max work queue data size: 1 MB
           flowfile expiration: 60 sec
+          drop empty: false
 
     Remote Processing Groups:
         - name: NiFi Flow
@@ -298,9 +302,10 @@ The MQTTController Service can be configured for MQTT connectivity and provide t
   In the configuration below there are two classes defined under "NetworkPrioritizerService", one class "NetworkPrioritizerService2" defines en0, and en1.
   If en0 is down at any point, then en1 will be given priority before resorting to en2 and en3 of  "NetworkPrioritizerService3". If the throughput for 
   "NetworkPrioritizerService2" exceeds the defined throughput or the max payload of 1024, then "NetworkPrioritizerService3" will be used. If Max Payload and 
-  Max Throughput are not defined, then they will not be limiting factors. As of release, 0.5.0, Max Payload will only be used for processors that custom 
-  implement that feature. RPGs will not support max payloads until 0.6.0. Additionally, since connection queues aren't prioritized, you must have a live connection
-  for your data to send it. Since connection queues can't be re-prioritized, this can create a starvation problem. The configuration is required to account for this.
+  Max Throughput are not defined, then they will not be limiting factors. 
+  
+  Since connection queues can't be re-prioritized, this can create a starvation problem if no connection is available. 
+  The configuration is required to account for this.
     
    Controller Services:
    - name: NetworkPrioritizerService
@@ -322,4 +327,6 @@ The MQTTController Service can be configured for MQTT connectivity and provide t
          Network Controllers: en2,en3
          Max Throughput: 1,024,1024
          Max Payload: 1,024,1024
-         
+
+### JNI Functionality
+Please see the [JNI Configuration Guide](JNI.md).

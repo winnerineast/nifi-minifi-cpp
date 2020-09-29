@@ -14,8 +14,12 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#ifndef SOCKET_FACTORY_H
-#define SOCKET_FACTORY_H
+#ifndef LIBMINIFI_INCLUDE_IO_STREAMFACTORY_H_
+#define LIBMINIFI_INCLUDE_IO_STREAMFACTORY_H_
+
+#include <memory>
+#include <string>
+#include <utility>
 
 #include "properties/Configure.h"
 #include "Sockets.h"
@@ -31,22 +35,19 @@ namespace io {
 
 class AbstractStreamFactory {
  public:
-  virtual ~AbstractStreamFactory() {
-  }
+  virtual ~AbstractStreamFactory() = default;
 
-  virtual std::unique_ptr<Socket> createSocket(const std::string &host, const uint16_t port) = 0;
+  virtual std::unique_ptr<Socket> createSocket(const std::string &host, uint16_t port) = 0;
 
-  virtual std::unique_ptr<Socket> createSecureSocket(const std::string &host, const uint16_t port, const std::shared_ptr<minifi::controllers::SSLContextService> &ssl_service) = 0;
+  virtual std::unique_ptr<Socket> createSecureSocket(const std::string &host, uint16_t port, const std::shared_ptr<minifi::controllers::SSLContextService> &ssl_service) = 0;
 };
 
 /**
  Purpose: Due to the current design this is the only mechanism by which we can
  inject different socket types
- 
  **/
 class StreamFactory {
  public:
-
   /**
    * Creates a socket and returns a unique ptr
    *
@@ -90,16 +91,15 @@ class StreamFactory {
   }
 
  protected:
-
-  StreamFactory(const std::shared_ptr<Configure> &configure);
+  StreamFactory(const std::shared_ptr<Configure> &configure); // NOLINT
 
   std::shared_ptr<AbstractStreamFactory> delegate_;
 };
 
-} /* namespace io */
-} /* namespace minifi */
-} /* namespace nifi */
-} /* namespace apache */
-} /* namespace org */
+}  // namespace io
+}  // namespace minifi
+}  // namespace nifi
+}  // namespace apache
+}  // namespace org
 
-#endif
+#endif  // LIBMINIFI_INCLUDE_IO_STREAMFACTORY_H_

@@ -19,9 +19,6 @@
  */
 #include "EventDrivenSchedulingAgent.h"
 #include <chrono>
-#include <memory>
-#include <thread>
-#include <iostream>
 #include "core/Processor.h"
 #include "core/ProcessContext.h"
 #include "core/ProcessSessionFactory.h"
@@ -32,31 +29,35 @@ namespace apache {
 namespace nifi {
 namespace minifi {
 
-uint64_t EventDrivenSchedulingAgent::run(const std::shared_ptr<core::Processor> &processor, const std::shared_ptr<core::ProcessContext> &processContext,
-                                         const std::shared_ptr<core::ProcessSessionFactory> &sessionFactory) {
-  while (this->running_) {
-    bool shouldYield = this->onTrigger(processor, processContext, sessionFactory);
-
-    if (processor->isYield()) {
-      // Honor the yield
-      return processor->getYieldTime();
-    } else if (shouldYield && this->bored_yield_duration_ > 0) {
-      // No work to do or need to apply back pressure
-      return this->bored_yield_duration_;
-    }
-
-    // Block until work is available
-
-    processor->waitForWork(1000);
-
-    if (!processor->isWorkAvailable()) {
-      return 1000;
-    }
+void EventDrivenSchedulingAgent::schedule(std::shared_ptr<core::Processor> processor) {
+  if (!processor->hasIncomingConnections()) {
+    throw Exception(PROCESS_SCHEDULE_EXCEPTION, "EventDrivenSchedulingAgent cannot schedule processor without incoming connection!");
   }
-  return 0;
+  ThreadedSchedulingAgent::schedule(processor);
 }
 
-} /* namespace minifi */
-} /* namespace nifi */
-} /* namespace apache */
-} /* namespace org */
+utils::TaskRescheduleInfo EventDrivenSchedulingAgent::run(const std::shared_ptr<core::Processor> &processor, const std::shared_ptr<core::ProcessContext> &processContext,
+                                         const std::shared_ptr<core::ProcessSessionFactory> &sessionFactory) {
+  if (this->running_) {
+    auto start_time = std::chrono::steady_clock::now();
+    // trigger processor until it has work to do, but no more than half a sec
+    while (processor->isRunning() && (std::chrono::steady_clock::now() - start_time < time_slice_)) {
+      bool shouldYield = this->onTrigger(processor, processContext, sessionFactory);
+      if (processor->isYield()) {
+        // Honor the yield
+        return utils::TaskRescheduleInfo::RetryIn(std::chrono::milliseconds(processor->getYieldTime()));
+      } else if (shouldYield) {
+        // No work to do or need to apply back pressure
+        return utils::TaskRescheduleInfo::RetryIn(
+            std::chrono::milliseconds((this->bored_yield_duration_ > 0) ? this->bored_yield_duration_ : 10));  // No work left to do, stand by
+      }
+    }
+    return utils::TaskRescheduleInfo::RetryImmediately();  // Let's continue work as soon as a thread is available
+  }
+  return utils::TaskRescheduleInfo::Done();
+}
+
+}  // namespace minifi
+}  // namespace nifi
+}  // namespace apache
+}  // namespace org

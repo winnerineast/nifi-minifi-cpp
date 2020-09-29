@@ -17,9 +17,12 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#ifndef __THREADED_SCHEDULING_AGENT_H__
-#define __THREADED_SCHEDULING_AGENT_H__
+#ifndef LIBMINIFI_INCLUDE_THREADEDSCHEDULINGAGENT_H_
+#define LIBMINIFI_INCLUDE_THREADEDSCHEDULINGAGENT_H_
 
+#include <memory>
+#include <set>
+#include <string>
 #include <chrono>
 #include "properties/Configure.h"
 #include "core/logging/LoggerConfiguration.h"
@@ -45,16 +48,15 @@ class ThreadedSchedulingAgent : public SchedulingAgent {
    * Create a new threaded scheduling agent.
    */
   ThreadedSchedulingAgent(std::shared_ptr<core::controller::ControllerServiceProvider> controller_service_provider, std::shared_ptr<core::Repository> repo, std::shared_ptr<core::Repository> flow_repo,
-                          std::shared_ptr<core::ContentRepository> content_repo, std::shared_ptr<Configure> configuration)
-      : SchedulingAgent(controller_service_provider, repo, flow_repo, content_repo, configuration),
+                          std::shared_ptr<core::ContentRepository> content_repo, std::shared_ptr<Configure> configuration,  utils::ThreadPool<utils::TaskRescheduleInfo> &thread_pool)
+      : SchedulingAgent(controller_service_provider, repo, flow_repo, content_repo, configuration, thread_pool),
         logger_(logging::LoggerFactory<ThreadedSchedulingAgent>::getLogger()) {
   }
   // Destructor
-  virtual ~ThreadedSchedulingAgent() {
-  }
+  virtual ~ThreadedSchedulingAgent() = default;
 
   // Run function for the thread
-  virtual uint64_t run(const std::shared_ptr<core::Processor> &processor, const std::shared_ptr<core::ProcessContext> &processContext,
+  virtual utils::TaskRescheduleInfo run(const std::shared_ptr<core::Processor> &processor, const std::shared_ptr<core::ProcessContext> &processContext,
                        const std::shared_ptr<core::ProcessSessionFactory> &sessionFactory) = 0;
 
  public:
@@ -65,18 +67,18 @@ class ThreadedSchedulingAgent : public SchedulingAgent {
 
   virtual void stop();
 
- protected:
-
  private:
   // Prevent default copy constructor and assignment operation
   // Only support pass by reference or pointer
   ThreadedSchedulingAgent(const ThreadedSchedulingAgent &parent);
   ThreadedSchedulingAgent &operator=(const ThreadedSchedulingAgent &parent);
   std::shared_ptr<logging::Logger> logger_;
+
+  std::set<std::string> processors_running_;  // Set just for easy usage
 };
 
-} /* namespace minifi */
-} /* namespace nifi */
-} /* namespace apache */
-} /* namespace org */
-#endif
+}  // namespace minifi
+}  // namespace nifi
+}  // namespace apache
+}  // namespace org
+#endif  // LIBMINIFI_INCLUDE_THREADEDSCHEDULINGAGENT_H_

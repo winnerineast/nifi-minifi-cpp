@@ -26,6 +26,7 @@
 #include <string>
 #include <vector>
 #include <typeinfo>
+#include "utils/ValueParser.h"
 
 namespace org {
 namespace apache {
@@ -42,16 +43,15 @@ namespace response {
  * representation is needed.
  */
 class Value {
- public:
+  using ParseException = utils::internal::ParseException;
 
+ public:
   explicit Value(const std::string &value)
       : string_value(value),
         type_id(std::type_index(typeid(std::string))) {
   }
 
-  virtual ~Value() {
-
-  }
+  virtual ~Value() = default;
   std::string getStringValue() const {
     return string_value;
   }
@@ -71,12 +71,12 @@ class Value {
 
   static const std::type_index UINT64_TYPE;
   static const std::type_index INT64_TYPE;
+  static const std::type_index UINT32_TYPE;
   static const std::type_index INT_TYPE;
   static const std::type_index BOOL_TYPE;
   static const std::type_index STRING_TYPE;
 
  protected:
-
   template<typename T>
   bool convertValueImpl(T &ref) {
     return getValue(ref);
@@ -87,28 +87,112 @@ class Value {
     type_id = std::type_index(typeid(T));
   }
 
+  virtual bool getValue(uint32_t &ref) {
+    try {
+      uint32_t value;
+      utils::internal::ValueParser(string_value).parse(value).parseEnd();
+      ref = value;
+    } catch(const ParseException&) {
+      return false;
+    }
+    return true;
+  }
+
   virtual bool getValue(int &ref) {
-    ref = std::stol(string_value);
+    try {
+      int value;
+      utils::internal::ValueParser(string_value).parse(value).parseEnd();
+      ref = value;
+    } catch(const ParseException&) {
+      return false;
+    }
     return true;
   }
 
   virtual bool getValue(int64_t &ref) {
-    ref = std::stoll(string_value);
+    try {
+      int64_t value;
+      utils::internal::ValueParser(string_value).parse(value).parseEnd();
+      ref = value;
+    } catch(const ParseException&) {
+      return false;
+    }
     return true;
   }
 
   virtual bool getValue(uint64_t &ref) {
-    ref = std::stoull(string_value);
+    try {
+      uint64_t value;
+      utils::internal::ValueParser(string_value).parse(value).parseEnd();
+      ref = value;
+    } catch(const ParseException&) {
+      return false;
+    }
     return true;
   }
 
   virtual bool getValue(bool &ref) {
-    std::istringstream(string_value) >> std::boolalpha >> ref;
+    try {
+      bool value;
+      utils::internal::ValueParser(string_value).parse(value).parseEnd();
+      ref = value;
+    } catch(const ParseException&) {
+      return false;
+    }
     return true;
   }
 
   std::string string_value;
   std::type_index type_id;
+};
+
+class UInt32Value : public Value {
+ public:
+  explicit UInt32Value(uint32_t value)
+      : Value(std::to_string(value)),
+        value(value) {
+    setTypeId<uint32_t>();
+  }
+
+  explicit UInt32Value(const std::string &strvalue)
+      : Value(strvalue) {
+    utils::internal::ValueParser(strvalue).parse(value).parseEnd();
+    setTypeId<uint32_t>();
+  }
+
+  uint32_t getValue() const {
+    return value;
+  }
+
+ protected:
+  virtual bool getValue(uint32_t &ref) {
+    ref = value;
+    return true;
+  }
+
+  virtual bool getValue(int &ref) {
+    if (value <= static_cast<uint32_t>((std::numeric_limits<int>::max)())) {
+      ref = value;
+      return true;
+    }
+    return false;
+  }
+
+  virtual bool getValue(int64_t &ref) {
+    ref = value;
+    return true;
+  }
+
+  virtual bool getValue(uint64_t &ref) {
+    ref = value;
+    return true;
+  }
+
+  virtual bool getValue(bool &ref) {
+    return false;
+  }
+
+  uint32_t value;
 };
 
 class IntValue : public Value {
@@ -120,17 +204,21 @@ class IntValue : public Value {
   }
 
   explicit IntValue(const std::string &strvalue)
-      : Value(strvalue),
-        value(std::stoi(strvalue)) {
-
+      : Value(strvalue) {
+    utils::internal::ValueParser(strvalue).parse(value).parseEnd();
   }
   int getValue() const {
     return value;
   }
 
  protected:
-
   virtual bool getValue(int &ref) {
+    ref = value;
+    return true;
+  }
+
+  virtual bool getValue(uint32_t &ref) {
+    if (value < 0) return false;
     ref = value;
     return true;
   }
@@ -162,50 +250,28 @@ class BoolValue : public Value {
 
   explicit BoolValue(const std::string &strvalue)
       : Value(strvalue) {
-    bool l;
-    std::istringstream(strvalue) >> std::boolalpha >> l;
-    value = l;  // avoid warnings
+    utils::internal::ValueParser(strvalue).parse(value).parseEnd();
   }
 
   bool getValue() const {
     return value;
   }
- protected:
 
+ protected:
   virtual bool getValue(int &ref) {
-    if (ref == 1) {
-      ref = true;
-      return true;
-    } else if (ref == 0) {
-      ref = false;
-      return true;
-    } else {
-      return false;
-    }
+    return PreventSwearingInFutureRefactor(ref);
+  }
+
+  virtual bool getValue(uint32_t &ref) {
+    return PreventSwearingInFutureRefactor(ref);
   }
 
   virtual bool getValue(int64_t &ref) {
-    if (ref == 1) {
-      ref = true;
-      return true;
-    } else if (ref == 0) {
-      ref = false;
-      return true;
-    } else {
-      return false;
-    }
+    return PreventSwearingInFutureRefactor(ref);
   }
 
   virtual bool getValue(uint64_t &ref) {
-    if (ref == 1) {
-      ref = true;
-      return true;
-    } else if (ref == 0) {
-      ref = false;
-      return true;
-    } else {
-      return false;
-    }
+    return PreventSwearingInFutureRefactor(ref);
   }
 
   virtual bool getValue(bool &ref) {
@@ -214,6 +280,16 @@ class BoolValue : public Value {
   }
 
   bool value;
+
+ private:
+  template<typename T>
+  bool PreventSwearingInFutureRefactor(T &ref) {
+    if (value != 0 && value != 1) {
+      return false;
+    }
+    ref = value != 0;
+    return true;
+  }
 };
 
 class UInt64Value : public Value {
@@ -225,22 +301,26 @@ class UInt64Value : public Value {
   }
 
   explicit UInt64Value(const std::string &strvalue)
-      : Value(strvalue),
-        value(std::stoull(strvalue)) {
+      : Value(strvalue) {
+    utils::internal::ValueParser(strvalue).parse(value).parseEnd();
     setTypeId<uint64_t>();
   }
 
   uint64_t getValue() const {
     return value;
   }
- protected:
 
+ protected:
   virtual bool getValue(int &ref) {
     return false;
   }
 
+  virtual bool getValue(uint32_t &ref) {
+    return false;
+  }
+
   virtual bool getValue(int64_t &ref) {
-    if (value <= (std::numeric_limits<int64_t>::max)()) {
+    if (value <= static_cast<uint32_t>((std::numeric_limits<int64_t>::max)())) {
       ref = value;
       return true;
     }
@@ -267,17 +347,21 @@ class Int64Value : public Value {
     setTypeId<int64_t>();
   }
   explicit Int64Value(const std::string &strvalue)
-      : Value(strvalue),
-        value(std::stoll(strvalue)) {
+      : Value(strvalue) {
+    utils::internal::ValueParser(strvalue).parse(value).parseEnd();
     setTypeId<int64_t>();
   }
 
   int64_t getValue() {
     return value;
   }
- protected:
 
+ protected:
   virtual bool getValue(int &ref) {
+    return false;
+  }
+
+  virtual bool getValue(uint32_t &ref) {
     return false;
   }
 
@@ -287,11 +371,9 @@ class Int64Value : public Value {
   }
 
   virtual bool getValue(uint64_t &ref) {
-    if (value >= 0) {
-      ref = value;
-      return true;
-    }
-    return false;
+    if (value < 0) return false;
+    ref = value;
+    return true;
   }
 
   virtual bool getValue(bool &ref) {
@@ -318,7 +400,7 @@ static inline std::shared_ptr<Value> createValue(const std::string &object) {
 }
 
 static inline std::shared_ptr<Value> createValue(const uint32_t &object) {
-  return std::make_shared<UInt64Value>(object);
+  return std::make_shared<UInt32Value>(object);
 }
 #if ( defined(__APPLE__) || defined(__MACH__) || defined(DARWIN) )
 static inline std::shared_ptr<Value> createValue(const size_t &object) {
@@ -357,19 +439,17 @@ class ValueNode {
   auto operator=(const T ref) -> typename std::enable_if<std::is_same<T, int >::value ||
   std::is_same<T, uint32_t >::value ||
   std::is_same<T, size_t >::value ||
+  std::is_same<T, int64_t>::value ||
   std::is_same<T, uint64_t >::value ||
   std::is_same<T, bool >::value ||
   std::is_same<T, char* >::value ||
   std::is_same<T, const char* >::value ||
-  std::is_same<T, std::string>::value,ValueNode&>::type {
+  std::is_same<T, std::string>::value, ValueNode&>::type {
     value_ = createValue(ref);
     return *this;
   }
 
-  ValueNode &operator=(const ValueNode &ref) {
-    value_ = ref.value_;
-    return *this;
-  }
+  ValueNode &operator=(const ValueNode &ref) = default;
 
   inline bool operator==(const ValueNode &rhs) const {
     return to_string() == rhs.to_string();
@@ -406,7 +486,7 @@ struct SerializedResponseNode {
   bool collapsible;
   std::vector<SerializedResponseNode> children;
 
-  SerializedResponseNode(bool collapsible = true)
+  SerializedResponseNode(bool collapsible = true) // NOLINT
       : array(false),
         collapsible(collapsible) {
   }
@@ -416,11 +496,11 @@ struct SerializedResponseNode {
   SerializedResponseNode &operator=(const SerializedResponseNode &other) = default;
 };
 
-} /* namespace metrics */
-} /* namespace state */
-} /* namespace minifi */
-} /* namespace nifi */
-} /* namespace apache */
-} /* namespace org */
+}  // namespace response
+}  // namespace state
+}  // namespace minifi
+}  // namespace nifi
+}  // namespace apache
+}  // namespace org
 
-#endif /* LIBMINIFI_INCLUDE_CORE_STATE_VALUE_H_ */
+#endif  // LIBMINIFI_INCLUDE_CORE_STATE_VALUE_H_

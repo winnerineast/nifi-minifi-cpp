@@ -18,13 +18,15 @@
  * limitations under the License.
  */
 #include "ArchiveTests.h"
-#include <set>
+
 #include <algorithm>
+#include <set>
 #include <string>
 #include <utility>
 
-#include <archive.h>
-#include <archive_entry.h>
+#include <archive.h> // NOLINT
+#include <archive_entry.h> // NOLINT
+
 #include "../../TestBase.h"
 
 TAE_MAP_T build_test_archive_map(int NUM_FILES, const char** FILE_NAMES, const char** FILE_CONTENT) {
@@ -137,11 +139,11 @@ bool check_archive_contents(std::string path, TAE_MAP_T entries, bool check_attr
 
       if (size > 0) {
         int rlen, nlen = 0;
-        const char* buf[size];
+        std::vector<char> buf(size);
         bool read_ok = true;
 
         for (;;) {
-          rlen = archive_read_data(a, buf, size);
+          rlen = archive_read_data(a, buf.data(), size);
           nlen += rlen;
           if (rlen == 0)
             break;
@@ -154,7 +156,7 @@ bool check_archive_contents(std::string path, TAE_MAP_T entries, bool check_attr
 
         if (read_ok) {
           REQUIRE(nlen == size);
-          REQUIRE(memcmp(buf, test_entry.content, size) == 0);
+          REQUIRE(memcmp(buf.data(), test_entry.content, size) == 0);
         }
       }
 

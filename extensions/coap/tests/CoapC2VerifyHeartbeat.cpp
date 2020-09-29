@@ -54,25 +54,6 @@
 #include "io/BaseStream.h"
 #include "concurrentqueue.h"
 
-class Responder : public CivetHandler {
- public:
-  explicit Responder(bool isSecure)
-      : isSecure(isSecure) {
-  }
-  bool handlePost(CivetServer *server, struct mg_connection *conn) {
-    std::string resp = "{\"operation\" : \"heartbeat\", \"requested_operations\" : [{ \"operationid\" : 41, \"operation\" : \"stop\", \"name\" : \"invoke\"  }, "
-        "{ \"operationid\" : 42, \"operation\" : \"stop\", \"name\" : \"FlowController\"  } ]}";
-    mg_printf(conn, "HTTP/1.1 200 OK\r\nContent-Type: "
-              "text/plain\r\nContent-Length: %lu\r\nConnection: close\r\n\r\n",
-              resp.length());
-    mg_printf(conn, "%s", resp.c_str());
-    return true;
-  }
-
- protected:
-  bool isSecure;
-};
-
 class VerifyCoAPServer : public CoapIntegrationBase {
  public:
   explicit VerifyCoAPServer(bool isSecure)
@@ -128,7 +109,7 @@ class VerifyCoAPServer : public CoapIntegrationBase {
     server = std::unique_ptr<minifi::coap::CoapServer>(new minifi::coap::CoapServer("127.0.0.1", newport));
 
 
-    server->add_endpoint(minifi::coap::METHOD::POST, [](minifi::coap::CoapQuery)->minifi::coap::CoapResponse {
+    server->add_endpoint(minifi::coap::Method::Post, [](minifi::coap::CoapQuery)->minifi::coap::CoapResponse {
       minifi::coap::CoapResponse response(205,0x00,0);
       return response;
 
@@ -165,7 +146,7 @@ class VerifyCoAPServer : public CoapIntegrationBase {
       responses.enqueue(std::move(response));
     }
 
-    server->add_endpoint("heartbeat", minifi::coap::METHOD::POST, [&](minifi::coap::CoapQuery)-> minifi::coap::CoapResponse {
+    server->add_endpoint("heartbeat", minifi::coap::Method::Post, [&](minifi::coap::CoapQuery)-> minifi::coap::CoapResponse {
       if (responses.size_approx() > 0) {
         minifi::coap::CoapResponse resp(500,0,0);;
         responses.try_dequeue(resp);
@@ -192,28 +173,17 @@ class VerifyCoAPServer : public CoapIntegrationBase {
   moodycamel::ConcurrentQueue<minifi::coap::CoapResponse> responses;
   std::unique_ptr<minifi::coap::CoapServer> server;
   bool isSecure;
-  char *dir;
+  std::string dir;
   std::stringstream ss;
   TestController testController;
 };
 
 int main(int argc, char **argv) {
-  std::string key_dir, test_file_location, url;
-  if (argc > 1) {
-    test_file_location = argv[1];
-    key_dir = argv[2];
-  }
-
-  bool isSecure = false;
-  if (url.find("https") != std::string::npos) {
-    isSecure = true;
-  }
+  const cmd_args args = parse_cmdline_args(argc, argv);
+  const bool isSecure = args.isUrlSecure();
 
   VerifyCoAPServer harness(isSecure);
-
-  harness.setKeyDir(key_dir);
-
-  harness.run(test_file_location);
-
+  harness.setKeyDir(args.key_dir);
+  harness.run(args.test_file);
   return 0;
 }

@@ -50,13 +50,15 @@ class PublishMQTT : public processors::AbstractMQTTProcessor {
     max_seg_size_ = ULLONG_MAX;
   }
   // Destructor
-  virtual ~PublishMQTT() {
-  }
+  virtual ~PublishMQTT() = default;
   // Processor Name
   static constexpr char const* ProcessorName = "PublishMQTT";
   // Supported Properties
   static core::Property Retain;
   static core::Property MaxFlowSegSize;
+
+  static core::Relationship Failure;
+  static core::Relationship Success;
 
   // Nest Callback Class for read stream
   class ReadCallback : public InputStreamCallback {
@@ -72,8 +74,7 @@ class PublishMQTT : public processors::AbstractMQTTProcessor {
       status_ = 0;
       read_size_ = 0;
     }
-    ~ReadCallback() {
-    }
+    ~ReadCallback() = default;
     int64_t process(std::shared_ptr<io::BaseStream> stream) {
       if (flow_size_ < max_seg_size_)
         max_seg_size_ = flow_size_;
@@ -123,11 +124,11 @@ class PublishMQTT : public processors::AbstractMQTTProcessor {
    * @param sessionFactory process session factory that is used when creating
    * ProcessSession objects.
    */
-  void onSchedule(core::ProcessContext *context, core::ProcessSessionFactory *sessionFactory);
+  void onSchedule(const std::shared_ptr<core::ProcessContext> &context, const std::shared_ptr<core::ProcessSessionFactory> &factory) override;
   // OnTrigger method, implemented by NiFi PublishMQTT
-  virtual void onTrigger(const std::shared_ptr<core::ProcessContext> &context, const std::shared_ptr<core::ProcessSession> &session);
+  void onTrigger(const std::shared_ptr<core::ProcessContext> &context, const std::shared_ptr<core::ProcessSession> &session) override;
   // Initialize, over write by NiFi PublishMQTT
-  virtual void initialize(void);
+  void initialize(void) override;
 
  protected:
 

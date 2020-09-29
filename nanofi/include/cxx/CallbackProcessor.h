@@ -27,6 +27,7 @@
 #include <thread>
 #include <functional>
 #include <iostream>
+#include <utility>
 #include <sys/types.h>
 #include "core/cstructs.h"
 #include "io/BaseStream.h"
@@ -53,40 +54,38 @@ class CallbackProcessor : public core::Processor {
    * Create a new processor
    */
   CallbackProcessor(std::string name, utils::Identifier uuid = utils::Identifier())
-      : Processor(name, uuid),
-        callback_(nullptr),
-        objref_(nullptr),
-        logger_(logging::LoggerFactory<CallbackProcessor>::getLogger()) {
+      : Processor(std::move(name), uuid) {
   }
   // Destructor
-  virtual ~CallbackProcessor() {
-
-  }
+  ~CallbackProcessor() override = default;
   // Processor Name
   static constexpr char const* ProcessorName = "CallbackProcessor";
 
  public:
-
-  void setCallback(void *obj,std::function<void(core::ProcessSession*, core::ProcessContext *context)> ontrigger_callback) {
+  void setCallback(void *obj, std::function<void(core::ProcessSession*, core::ProcessContext *context)> ontrigger_callback,
+                   std::function<void(core::ProcessContext *context)> onschedule_callback = {}) {
     objref_ = obj;
-    callback_ = ontrigger_callback;
+    ontrigger_callback_ = std::move(ontrigger_callback);
+    onschedule_callback_ = std::move(onschedule_callback);
   }
 
-  // OnTrigger method, implemented by NiFi CallbackProcessor
-  virtual void onTrigger(core::ProcessContext *context, core::ProcessSession *session);  // override;
+  void onSchedule(core::ProcessContext *context, core::ProcessSessionFactory *sessionFactory) override;
+  // OnTrigger method, implemented by MiNiFi CallbackProcessor
+  void onTrigger(core::ProcessContext *context, core::ProcessSession *session) override;  // override;
   // Initialize, over write by NiFi CallbackProcessor
-  virtual void initialize();  // override;
+  void initialize() override;  // override;
 
-  virtual bool supportsDynamicProperties() /*override*/ {
+  bool supportsDynamicProperties() override /*override*/ {
     return true;
   }
 
  protected:
-  void *objref_;
-  std::function<void(core::ProcessSession*, core::ProcessContext *context)> callback_;
+  void *objref_{ nullptr };
+  std::function<void(core::ProcessSession*, core::ProcessContext *context)> ontrigger_callback_;
+  std::function<void(core::ProcessContext *context)> onschedule_callback_;
  private:
   // Logger
-  std::shared_ptr<logging::Logger> logger_;
+  std::shared_ptr<logging::Logger> logger_{ logging::LoggerFactory<CallbackProcessor>::getLogger() };
 
 };
 

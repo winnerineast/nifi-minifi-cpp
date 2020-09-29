@@ -17,10 +17,11 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#ifndef __REPOSITORY_H__
-#define __REPOSITORY_H__
+#ifndef LIBMINIFI_INCLUDE_CORE_REPOSITORY_H_
+#define LIBMINIFI_INCLUDE_CORE_REPOSITORY_H_
 
-#include <uuid/uuid.h>
+#include <memory>
+#include <utility>
 #include <atomic>
 #include <cstdint>
 #include <cstring>
@@ -51,9 +52,9 @@ namespace minifi {
 namespace core {
 
 #define REPOSITORY_DIRECTORY "./repo"
-#define MAX_REPOSITORY_STORAGE_SIZE (10*1024*1024) // 10M
-#define MAX_REPOSITORY_ENTRY_LIFE_TIME (600000) // 10 minute
-#define REPOSITORY_PURGE_PERIOD (2500) // 2500 msec
+#define MAX_REPOSITORY_STORAGE_SIZE (10*1024*1024)  // 10M
+#define MAX_REPOSITORY_ENTRY_LIFE_TIME (600000)  // 10 minute
+#define REPOSITORY_PURGE_PERIOD (2500)  // 2500 msec
 
 class Repository : public virtual core::SerializableComponent, public core::TraceableResource {
  public:
@@ -80,6 +81,10 @@ class Repository : public virtual core::SerializableComponent, public core::Trac
     stop();
   }
 
+  virtual bool isNoop() {
+    return true;
+  }
+
   virtual void flush();
 
   // initialize
@@ -90,6 +95,11 @@ class Repository : public virtual core::SerializableComponent, public core::Trac
   virtual bool Put(std::string key, const uint8_t *buf, size_t bufLen) {
     return true;
   }
+
+  virtual bool MultiPut(const std::vector<std::pair<std::string, std::unique_ptr<io::DataStream>>>& data) {
+    return true;
+  }
+
   // Delete
   virtual bool Delete(std::string key) {
     return true;
@@ -119,7 +129,7 @@ class Repository : public virtual core::SerializableComponent, public core::Trac
   /**
    * Since SerializableComponents represent a runnable object, we should return traces
    */
-  virtual BackTrace &&getTraces() {
+  virtual BackTrace getTraces() {
     return TraceResolver::getResolver().getBackTrace(getName(), thread_.native_handle());
   }
 
@@ -208,7 +218,6 @@ class Repository : public virtual core::SerializableComponent, public core::Trac
   }
 
   virtual void loadComponent(const std::shared_ptr<core::ContentRepository> &content_repo) {
-
   }
 
   virtual uint64_t getRepoSize();
@@ -233,7 +242,7 @@ class Repository : public virtual core::SerializableComponent, public core::Trac
   // thread
   std::thread thread_;
   // whether the monitoring thread is running for the repo while it was enabled
-  bool running_;
+  std::atomic<bool> running_;
   // whether stop accepting provenace event
   std::atomic<bool> repo_full_;
   // repoSize
@@ -249,9 +258,9 @@ class Repository : public virtual core::SerializableComponent, public core::Trac
   std::shared_ptr<logging::Logger> logger_;
 };
 
-} /* namespace core */
-} /* namespace minifi */
-} /* namespace nifi */
-} /* namespace apache */
-} /* namespace org */
-#endif
+}  // namespace core
+}  // namespace minifi
+}  // namespace nifi
+}  // namespace apache
+}  // namespace org
+#endif  // LIBMINIFI_INCLUDE_CORE_REPOSITORY_H_

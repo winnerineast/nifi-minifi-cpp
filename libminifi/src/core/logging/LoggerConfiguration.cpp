@@ -19,6 +19,7 @@
  */
 
 #include "core/logging/LoggerConfiguration.h"
+
 #include <sys/stat.h>
 #include <algorithm>
 #include <vector>
@@ -29,12 +30,21 @@
 
 #include "core/Core.h"
 #include "utils/StringUtils.h"
+#include "utils/ClassUtils.h"
+#include "utils/file/FileUtils.h"
+#include "utils/Environment.h"
 
 #include "spdlog/spdlog.h"
 #include "spdlog/sinks/stdout_sinks.h"
 #include "spdlog/sinks/null_sink.h"
+
 #ifdef WIN32
-#define stat _stat
+#include "core/logging/WindowsEventLogSink.h"
+#else
+#include "spdlog/sinks/syslog_sink.h"
+#endif
+
+#ifdef WIN32
 #include <direct.h>
 #define _WINSOCKAPI_
 #include <windows.h>
@@ -48,7 +58,7 @@ namespace minifi {
 namespace core {
 namespace logging {
 
-const char* LoggerConfiguration::spdlog_default_pattern = "[%Y-%m-%ll %H:%M:%S.%e] [%n] [%l] %v";
+const char* LoggerConfiguration::spdlog_default_pattern = "[%Y-%m-%d %H:%M:%S.%e] [%n] [%l] %v";
 
 std::vector<std::string> LoggerProperties::get_keys_of_type(const std::string &type) {
   std::vector<std::string> appenders;
@@ -64,6 +74,7 @@ std::vector<std::string> LoggerProperties::get_keys_of_type(const std::string &t
 LoggerConfiguration::LoggerConfiguration()
     : root_namespace_(create_default_root()),
       loggers(std::vector<std::shared_ptr<LoggerImpl>>()),
+      shorten_names_(false),
       formatter_(std::make_shared<spdlog::pattern_formatter>(spdlog_default_pattern)) {
   controller_ = std::make_shared<LoggerControl>();
   logger_ = std::shared_ptr<LoggerImpl>(
@@ -78,6 +89,15 @@ void LoggerConfiguration::initialize(const std::shared_ptr<LoggerProperties> &lo
   if (!logger_properties->get("spdlog.pattern", spdlog_pattern)) {
     spdlog_pattern = spdlog_default_pattern;
   }
+
+  /**
+   * There is no need to shorten names per spdlog sink as this is a per log instance.
+   */
+  std::string shorten_names_str;
+  if (logger_properties->get("spdlog.shorten_names", shorten_names_str)) {
+    utils::StringUtils::StringToBool(shorten_names_str, shorten_names_);
+  }
+
   formatter_ = std::make_shared<spdlog::pattern_formatter>(spdlog_pattern);
   std::map<std::string, std::shared_ptr<spdlog::logger>> spdloggers;
   for (auto const & logger_impl : loggers) {
@@ -96,7 +116,16 @@ void LoggerConfiguration::initialize(const std::shared_ptr<LoggerProperties> &lo
 
 std::shared_ptr<Logger> LoggerConfiguration::getLogger(const std::string &name) {
   std::lock_guard<std::mutex> lock(mutex);
-  std::shared_ptr<LoggerImpl> result = std::make_shared<LoggerImpl>(name, controller_, get_logger(logger_, root_namespace_, name, formatter_));
+  std::string adjusted_name = name;
+  const std::string clazz = "class ";
+  auto haz_clazz = name.find(clazz);
+  if (haz_clazz == 0)
+    adjusted_name = name.substr(clazz.length(), name.length() - clazz.length());
+  if (shorten_names_) {
+    utils::ClassUtils::shortenClassName(adjusted_name, adjusted_name);
+  }
+
+  std::shared_ptr<LoggerImpl> result = std::make_shared<LoggerImpl>(adjusted_name, controller_, get_logger(logger_, root_namespace_, adjusted_name, formatter_));
   loggers.push_back(result);
   return result;
 }
@@ -116,30 +145,22 @@ std::shared_ptr<internal::LoggerNamespace> LoggerConfiguration::initialize_names
     if ("nullappender" == appender_type || "null appender" == appender_type || "null" == appender_type) {
       sink_map[appender_name] = std::make_shared<spdlog::sinks::null_sink_st>();
     } else if ("rollingappender" == appender_type || "rolling appender" == appender_type || "rolling" == appender_type) {
-      std::string file_name = "";
+      std::string file_name;
       if (!logger_properties->get(appender_key + ".file_name", file_name)) {
         file_name = "minifi-app.log";
       }
-      std::string directory = "";
-      directory = logger_properties->getHome();
-      if (!directory.empty()) {
-        // Create the log directory if needed
-        directory += "/logs";
-        struct stat logDirStat;
-#ifdef WIN32
-        if (stat(directory.c_str(), &logDirStat) != 0) {
-          if (_mkdir(directory.c_str()) == -1) {
-            exit(1);
-          }
-#else
-        if (stat(directory.c_str(), &logDirStat) != 0 || !S_ISDIR(logDirStat.st_mode)) {
-          if (mkdir(directory.c_str(), 0777) == -1) {
-            exit(1);
-          }
-#endif
-        }
-        file_name = directory + "/" + file_name;
+      std::string directory;
+      if (!logger_properties->get(appender_key + ".directory", directory)) {
+        // The below part assumes logger_properties->getHome() is existing
+        // Cause minifiHome must be set at MiNiFiMain.cpp?
+        directory = logger_properties->getHome() + utils::file::FileUtils::get_separator() + "logs";
       }
+
+      if (utils::file::FileUtils::create_dir(directory) == -1) {
+        std::cerr << directory << " cannot be created\n";
+        exit(1);
+      }
+      file_name = directory + utils::file::FileUtils::get_separator() + file_name;
 
       int max_files = 3;
       std::string max_files_str = "";
@@ -163,8 +184,12 @@ std::shared_ptr<internal::LoggerNamespace> LoggerConfiguration::initialize_names
       sink_map[appender_name] = std::make_shared<spdlog::sinks::rotating_file_sink_mt>(file_name, max_file_size, max_files);
     } else if ("stdout" == appender_type) {
       sink_map[appender_name] = spdlog::sinks::stdout_sink_mt::instance();
-    } else {
+    } else if ("stderr" == appender_type) {
       sink_map[appender_name] = spdlog::sinks::stderr_sink_mt::instance();
+    } else if ("syslog" == appender_type) {
+      sink_map[appender_name] = LoggerConfiguration::create_syslog_sink();
+    } else {
+      sink_map[appender_name] = LoggerConfiguration::create_fallback_sink();
     }
   }
 
@@ -267,6 +292,22 @@ std::shared_ptr<spdlog::logger> LoggerConfiguration::get_logger(std::shared_ptr<
     // Ignore as someone else beat us to registration, we should get the one they made below
   }
   return spdlog::get(name);
+}
+
+std::shared_ptr<spdlog::sinks::sink> LoggerConfiguration::create_syslog_sink() {
+#ifdef WIN32
+  return std::make_shared<internal::windowseventlog_sink>("ApacheNiFiMiNiFi");
+#else
+  return std::make_shared<spdlog::sinks::syslog_sink>("ApacheNiFiMiNiFi");
+#endif
+}
+
+std::shared_ptr<spdlog::sinks::sink> LoggerConfiguration::create_fallback_sink() {
+  if (utils::Environment::isRunningAsService()) {
+    return LoggerConfiguration::create_syslog_sink();
+  } else {
+    return spdlog::sinks::stderr_sink_mt::instance();
+  }
 }
 
 std::shared_ptr<internal::LoggerNamespace> LoggerConfiguration::create_default_root() {

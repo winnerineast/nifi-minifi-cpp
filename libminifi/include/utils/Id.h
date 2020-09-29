@@ -17,20 +17,32 @@
 #ifndef LIBMINIFI_INCLUDE_UTILS_ID_H_
 #define LIBMINIFI_INCLUDE_UTILS_ID_H_
 
+#include <utility>
 #include <cstddef>
 #include <atomic>
 #include <memory>
 #include <string>
-#include "uuid/uuid.h"
+#include <thread>
+
+#ifndef WIN32
+class uuid;
+#endif
 
 #include "core/logging/Logger.h"
 #include "properties/Properties.h"
 
-#define UNSIGNED_CHAR_MAX 255
 #define UUID_TIME_IMPL 0
 #define UUID_RANDOM_IMPL 1
 #define UUID_DEFAULT_IMPL 2
 #define MINIFI_UID_IMPL 3
+
+#define UUID_RANDOM_STR "random"
+#define UUID_WINDOWS_RANDOM_STR "windows_random"
+#define UUID_DEFAULT_STR "uuid_default"
+#define MINIFI_UID_STR "minifi_uid"
+#define UUID_TIME_STR "time"
+#define UUID_WINDOWS_STR "windows"
+
 
 namespace org {
 namespace apache {
@@ -41,8 +53,7 @@ namespace utils {
 template<typename T, typename C>
 class IdentifierBase {
  public:
-
-  IdentifierBase(T myid) {
+  IdentifierBase(T myid) { // NOLINT
     copyInto(myid);
   }
 
@@ -55,8 +66,7 @@ class IdentifierBase {
     copyInto(other.id_);
   }
 
-  IdentifierBase() {
-  }
+  IdentifierBase() = default;
 
   IdentifierBase &operator=(const IdentifierBase &other) {
     copyInto(other.id_);
@@ -77,7 +87,6 @@ class IdentifierBase {
   }
 
  protected:
-
   void copyInto(const IdentifierBase &other) {
     memcpy(id_, other.id_, sizeof(T));
   }
@@ -90,14 +99,16 @@ class IdentifierBase {
     memcpy(other, id_, sizeof(T));
   }
 
-  C converted_;
+  C converted_{};
 
-  T id_;
+  T id_{};
 };
+
+typedef uint8_t UUID_FIELD[16];
 
 class Identifier : public IdentifierBase<UUID_FIELD, std::string> {
  public:
-  Identifier(UUID_FIELD u);
+  Identifier(UUID_FIELD u); // NOLINT
   Identifier();
   Identifier(const Identifier &other);
   Identifier(Identifier &&other);
@@ -106,7 +117,7 @@ class Identifier : public IdentifierBase<UUID_FIELD, std::string> {
    * I believe these exist to make windows builds happy -- need more testing
    * to ensure this doesn't cause any issues.
    */
-  Identifier(const IdentifierBase &other);
+  Identifier(const IdentifierBase &other); // NOLINT
   Identifier &operator=(const IdentifierBase &other);
 
   Identifier &operator=(const Identifier &other);
@@ -125,9 +136,7 @@ class Identifier : public IdentifierBase<UUID_FIELD, std::string> {
   const unsigned char * const toArray() const;
 
  protected:
-
   void build_string();
-
 };
 
 class IdGenerator {
@@ -136,19 +145,30 @@ class IdGenerator {
   Identifier generate();
   void initialize(const std::shared_ptr<Properties> & properties);
 
+  ~IdGenerator();
+
   static std::shared_ptr<IdGenerator> getIdGenerator() {
     static std::shared_ptr<IdGenerator> generator = std::shared_ptr<IdGenerator>(new IdGenerator());
     return generator;
   }
+
  protected:
   uint64_t getDeviceSegmentFromString(const std::string & str, int numBits) const;
   uint64_t getRandomDeviceSegment(int numBits) const;
+
  private:
   IdGenerator();
   int implementation_;
   std::shared_ptr<minifi::core::logging::Logger> logger_;
+
   unsigned char deterministic_prefix_[8];
   std::atomic<uint64_t> incrementor_;
+
+  std::mutex uuid_mutex_;
+#ifndef WIN32
+  std::unique_ptr<uuid> uuid_impl_;
+  bool generateWithUuidImpl(unsigned int mode, UUID_FIELD output);
+#endif
 };
 
 class NonRepeatingStringGenerator {
@@ -165,10 +185,10 @@ class NonRepeatingStringGenerator {
   std::string prefix_;
 };
 
-} /* namespace utils */
-} /* namespace minifi */
-} /* namespace nifi */
-} /* namespace apache */
-} /* namespace org */
+}  // namespace utils
+}  // namespace minifi
+}  // namespace nifi
+}  // namespace apache
+}  // namespace org
 
-#endif /* LIBMINIFI_INCLUDE_UTILS_ID_H_ */
+#endif  // LIBMINIFI_INCLUDE_UTILS_ID_H_

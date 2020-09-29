@@ -31,21 +31,20 @@
 #include "concurrentqueue.h"
 #include "MQTTClient.h"
 
-#define MQTT_QOS_0 "0"
-#define MQTT_QOS_1 "1"
-#define MQTT_QOS_2 "2"
-
 namespace org {
 namespace apache {
 namespace nifi {
 namespace minifi {
 namespace controllers {
 
+static constexpr const char* const MQTT_QOS_0 = "0";
+static constexpr const char* const MQTT_QOS_1 = "1";
+static constexpr const char* const MQTT_QOS_2 = "2";
+
 class Message {
  public:
   // empty constructor facilitates moves
-  Message() {
-  }
+  Message() = default;
   explicit Message(const std::string &topic, void *data, size_t dataLen)
       : topic_(topic),
         data_((uint8_t*) data, ((uint8_t*)data + dataLen)) {
@@ -54,8 +53,7 @@ class Message {
       : topic_(std::move(other.topic_)),
         data_(std::move(other.data_)) {
   }
-  ~Message() {
-  }
+  ~Message() = default;
 
   Message &operator=(const Message &&other) {
     topic_ = std::move(other.topic_);

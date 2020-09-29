@@ -19,40 +19,14 @@
 
 include(${CMAKE_SOURCE_DIR}/extensions/ExtensionHeader.txt)
 
-file(GLOB SOURCES  "*.cpp")
+file(GLOB SOURCES  "*.cpp" "wel/*.cpp")
 
 add_library(minifi-wel STATIC ${SOURCES})
 set_property(TARGET minifi-wel PROPERTY POSITION_INDEPENDENT_CODE ON)
-if(THREADS_HAVE_PTHREAD_ARG)
-  target_compile_options(PUBLIC minifi-wel "-pthread")
-endif()
-if(CMAKE_THREAD_LIBS_INIT)
-  target_link_libraries(minifi-wel "${CMAKE_THREAD_LIBS_INIT}")
-endif()
 
+target_link_libraries(minifi-wel ${LIBMINIFI} Threads::Threads)
+target_link_libraries(minifi-wel PUGI::libpugixml ZLIB::ZLIB Wevtapi.lib)
 
-# Include UUID
-find_package(UUID REQUIRED)
-target_link_libraries(minifi-wel ${LIBMINIFI} ${UUID_LIBRARIES})
-target_link_libraries(minifi-wel ${CMAKE_DL_LIBS} )
-find_package(ZLIB REQUIRED)
-include_directories(${ZLIB_INCLUDE_DIRS})
-target_link_libraries (minifi-wel ${ZLIB_LIBRARIES})
-if (WIN32)
-    set_target_properties(minifi-wel PROPERTIES
-        LINK_FLAGS "/WHOLEARCHIVE"
-    )
-elseif (APPLE)
-    set_target_properties(minifi-wel PROPERTIES
-        LINK_FLAGS "-Wl,-all_load"
-    )
-else ()
-    set_target_properties(minifi-wel PROPERTIES
-        LINK_FLAGS "-Wl,--whole-archive"
-    )
-endif ()
-
-
-SET (WEL-EXTENSION minifi-wel PARENT_SCOPE)
+SET(WEL-EXTENSION minifi-wel PARENT_SCOPE)
 
 register_extension(minifi-wel)

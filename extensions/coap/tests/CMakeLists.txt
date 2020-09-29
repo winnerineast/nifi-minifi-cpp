@@ -17,18 +17,15 @@
 # under the License.
 #
 
-file(GLOB CURL_UNIT_TESTS  "unit/*.cpp")
-file(GLOB CURL_INTEGRATION_TESTS "*.cpp")
+file(GLOB COAP_INTEGRATION_TESTS "*.cpp")
 
 SET(CURL_INT_TEST_COUNT 0)
 
 if (NOT DISABLE_CURL)
-FOREACH(testfile ${CURL_INTEGRATION_TESTS})
+FOREACH(testfile ${COAP_INTEGRATION_TESTS})
   	get_filename_component(testfilename "${testfile}" NAME_WE)
   	add_executable("${testfilename}" "${testfile}")
-  	target_include_directories(${testfilename} BEFORE PRIVATE ${COAP_INCLUDE_DIRS})
-  	target_include_directories(${testfilename} BEFORE PRIVATE ${CURL_INCLUDE_DIRS})
-  	target_include_directories(${testfilename} BEFORE PRIVATE "${CIVET_THIRDPARTY_ROOT}/include")
+  	target_include_directories(${testfilename} BEFORE PRIVATE "${CMAKE_SOURCE_DIR}/extensions/standard-processors")
 	target_include_directories(${testfilename} BEFORE PRIVATE "${CMAKE_SOURCE_DIR}/libminifi/test/")
 	target_include_directories(${testfilename} BEFORE PRIVATE "../")
 	target_include_directories(${testfilename} BEFORE PRIVATE "../server")
@@ -42,13 +39,13 @@ FOREACH(testfile ${CURL_INTEGRATION_TESTS})
 	target_include_directories(${testfilename} BEFORE PRIVATE "../../http-curl/sitetosite/")
 	target_include_directories(${testfilename} BEFORE PRIVATE "${CMAKE_SOURCE_DIR}/extensions/civetweb/")
 	target_include_directories(${testfilename} BEFORE PRIVATE ./include)
-    createTests("${testfilename}")
-    if (APPLE)
-    	target_link_libraries ("${testfilename}" -Wl,-all_load ${ZLIB_LIBRARY} ${OPENSSL_LIBRARIES} minifi-http-curl minifi-coap minifi-civet-extensions)
-	else ()
-  		target_link_libraries ("${testfilename}" -Wl,--whole-archive ${ZLIB_LIBRARY} ${OPENSSL_LIBRARIES} minifi-http-curl minifi-coap minifi-civet-extensions -Wl,--no-whole-archive)
-  	endif()
-  MATH(EXPR CURL_INT_TEST_COUNT "${CURL_INT_TEST_COUNT}+1")
+	createTests("${testfilename}")
+	target_wholearchive_library(${testfilename} minifi-coap)
+	target_wholearchive_library(${testfilename} minifi-civet-extensions)
+	target_wholearchive_library(${testfilename} minifi-http-curl)
+	target_wholearchive_library(${testfilename} minifi-standard-processors)
+
+    MATH(EXPR CURL_INT_TEST_COUNT "${CURL_INT_TEST_COUNT}+1")
 ENDFOREACH()
 
 message("-- Finished building ${CURL_INT_TEST_COUNT} CoAP integration test file(s)...")

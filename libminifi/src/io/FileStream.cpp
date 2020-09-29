@@ -21,6 +21,7 @@
 #include <vector>
 #include <memory>
 #include <string>
+#include <Exception.h>
 #include "io/validation.h"
 namespace org {
 namespace apache {
@@ -28,12 +29,15 @@ namespace nifi {
 namespace minifi {
 namespace io {
 
-FileStream::FileStream(const std::string &path)
+FileStream::FileStream(const std::string &path, bool append)
     : logger_(logging::LoggerFactory<FileStream>::getLogger()),
       path_(path),
       offset_(0) {
   file_stream_ = std::unique_ptr<std::fstream>(new std::fstream());
-  file_stream_->open(path.c_str(), std::fstream::out | std::fstream::binary);
+  if (append)
+    file_stream_->open(path.c_str(), std::fstream::in | std::fstream::out | std::fstream::app | std::fstream::binary);
+  else
+    file_stream_->open(path.c_str(), std::fstream::out | std::fstream::binary);
   file_stream_->seekg(0, file_stream_->end);
   file_stream_->seekp(0, file_stream_->end);
   int len = file_stream_->tellg();
@@ -83,10 +87,14 @@ void FileStream::seek(uint64_t offset) {
 }
 
 int FileStream::writeData(std::vector<uint8_t> &buf, int buflen) {
-  if (static_cast<int>(buf.capacity()) < buflen) {
+  if (buflen < 0) {
+    throw minifi::Exception{ExceptionType::GENERAL_EXCEPTION, "negative buflen"};
+  }
+
+  if (buf.size() < static_cast<size_t>(buflen)) {
     return -1;
   }
-  return writeData(reinterpret_cast<uint8_t *>(&buf[0]), buflen);
+  return writeData(buf.data(), buflen);
 }
 
 // data stream overrides
@@ -113,16 +121,25 @@ int FileStream::writeData(uint8_t *value, int size) {
 template<typename T>
 inline std::vector<uint8_t> FileStream::readBuffer(const T& t) {
   std::vector<uint8_t> buf;
-  buf.resize(sizeof t);
-  readData(reinterpret_cast<uint8_t *>(&buf[0]), sizeof(t));
+  readBuffer(buf, t);
   return buf;
 }
 
+template<typename T>
+inline int FileStream::readBuffer(std::vector<uint8_t>& buf, const T& t) {
+  buf.resize(sizeof t);
+  return readData(reinterpret_cast<uint8_t *>(&buf[0]), sizeof(t));
+}
+
 int FileStream::readData(std::vector<uint8_t> &buf, int buflen) {
-  if (static_cast<int>(buf.capacity()) < buflen) {
+  if (buflen < 0) {
+    throw minifi::Exception{ExceptionType::GENERAL_EXCEPTION, "negative buflen"};
+  }
+
+  if (buf.size() < static_cast<size_t>(buflen)) {
     buf.resize(buflen);
   }
-  int ret = readData(reinterpret_cast<uint8_t*>(&buf[0]), buflen);
+  int ret = readData(buf.data(), buflen);
 
   if (ret < buflen) {
     buf.resize(ret);

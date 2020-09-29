@@ -18,6 +18,8 @@
 #ifndef LIBMINIFI_INCLUDE_CORE_CONTROLLER_CONTROLLERSERVICELOOKUP_H_
 #define LIBMINIFI_INCLUDE_CORE_CONTROLLER_CONTROLLERSERVICELOOKUP_H_
 
+#include <memory>
+#include <string>
 #include <map>
 #include "core/Core.h"
 #include "core/ConfigurableComponent.h"
@@ -39,14 +41,9 @@ namespace controller {
  */
 class ControllerServiceLookup {
  public:
+  ControllerServiceLookup() = default;
 
-  ControllerServiceLookup() {
-
-  }
-
-  virtual ~ControllerServiceLookup() {
-
-  }
+  virtual ~ControllerServiceLookup() = default;
 
   /**
    * Gets the controller service via the provided identifier.
@@ -74,14 +71,13 @@ class ControllerServiceLookup {
    * @param identifier reference string for the controller service.
    */
   virtual const std::string getControllerServiceName(const std::string &identifier) = 0;
-
 };
 
-} /* namespace controller */
-} /* namespace core */
-} /* namespace minifi */
-} /* namespace nifi */
-} /* namespace apache */
-} /* namespace org */
+}  // namespace controller
+}  // namespace core
+}  // namespace minifi
+}  // namespace nifi
+}  // namespace apache
+}  // namespace org
 
-#endif /* LIBMINIFI_INCLUDE_CORE_CONTROLLER_CONTROLLERSERVICELOOKUP_H_ */
+#endif  // LIBMINIFI_INCLUDE_CORE_CONTROLLER_CONTROLLERSERVICELOOKUP_H_

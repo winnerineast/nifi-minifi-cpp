@@ -35,11 +35,20 @@
 #include "sitetosite/HTTPProtocol.h"
 #include "utils/StringUtils.h"
 
+class HttpCurlObjectFactoryInitializer : public core::ObjectFactoryInitializer {
+ public:
+  virtual bool initialize() {
+    return curl_global_init(CURL_GLOBAL_DEFAULT) == CURLE_OK;
+  }
+
+  virtual void deinitialize() {
+    curl_global_cleanup();
+  }
+};
+
 class HttpCurlObjectFactory : public core::ObjectFactory {
  public:
-  HttpCurlObjectFactory() {
-
-  }
+  HttpCurlObjectFactory() = default;
 
   /**
    * Gets the name of the object.
@@ -78,6 +87,10 @@ class HttpCurlObjectFactory : public core::ObjectFactory {
     } else {
       return nullptr;
     }
+  }
+
+  virtual std::unique_ptr<core::ObjectFactoryInitializer> getInitializer() override{
+    return std::unique_ptr<core::ObjectFactoryInitializer>(new HttpCurlObjectFactoryInitializer());
   }
 
   static bool added;

@@ -15,7 +15,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include <uuid/uuid.h>
 #include <memory>
 
 #include "../../include/core/state/nodes/ProcessMetrics.h"
@@ -32,11 +31,12 @@ TEST_CASE("TestProcessMetrics", "[c2m1]") {
   minifi::state::response::ProcessMetrics metrics;
 
   REQUIRE("ProcessMetrics" == metrics.getName());
-
+#ifndef WIN32
   REQUIRE(2 == metrics.serialize().size());
 
   REQUIRE("MemoryMetrics" == metrics.serialize().at(0).name);
   REQUIRE("CpuMetrics" == metrics.serialize().at(1).name);
+#endif
 }
 
 TEST_CASE("TestSystemMetrics", "[c2m5]") {
@@ -44,10 +44,12 @@ TEST_CASE("TestSystemMetrics", "[c2m5]") {
 
   REQUIRE("systeminfo" == metrics.getName());
 
+#ifndef WIN32
   REQUIRE(2 == metrics.serialize().size());
 
   REQUIRE("systemInfo" == metrics.serialize().at(0).name);
   REQUIRE("identifier" == metrics.serialize().at(1).name);
+#endif
 }
 
 TEST_CASE("QueueMetricsTestNoConnections", "[c2m2]") {

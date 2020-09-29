@@ -16,7 +16,7 @@
 # specific language governing permissions and limitations
 # under the License.
 
-verify_enable(){
+verify_enable_platform(){
   feature="$1"
   feature_status=${!1}
   verify_gcc_enable $feature
@@ -50,12 +50,8 @@ build_deps(){
         VALUE=${cmake_opt#*:}
         if [ "$KEY" = "$option" ]; then
           FOUND_VALUE="$VALUE"
-          if [ "$FOUND_VALUE" = "libcurl" ]; then
-            INSTALLED+=("libcurl4-openssl-dev")
-          elif [ "$FOUND_VALUE" = "libpcap" ]; then
+          if [ "$FOUND_VALUE" = "libpcap" ]; then
             INSTALLED+=("libpcap-dev")
-          elif [ "$FOUND_VALUE" = "openssl" ]; then
-            INSTALLED+=("openssl")
           elif [ "$FOUND_VALUE" = "libusb" ]; then
             INSTALLED+=("libusb-1.0-0-dev")
             INSTALLED+=("libusb-dev")
@@ -65,18 +61,24 @@ build_deps(){
             INSTALLED+=("bison")
           elif [ "$FOUND_VALUE" = "flex" ]; then
             INSTALLED+=("flex")
-	  elif [ "$FOUND_VALUE" = "libtool" ]; then
+          elif [ "$FOUND_VALUE" = "libtool" ]; then
             INSTALLED+=("libtool")
           elif [ "$FOUND_VALUE" = "python" ]; then
             INSTALLED+=("libpython3-dev")
           elif [ "$FOUND_VALUE" = "lua" ]; then
             INSTALLED+=("liblua5.1-0-dev")
+          elif [ "$FOUND_VALUE" = "jnibuild" ]; then
+            INSTALLED+=("openjdk-8-jdk")
+            INSTALLED+=("openjdk-8-source")
+            INSTALLED+=("maven")
           elif [ "$FOUND_VALUE" = "automake" ]; then
             INSTALLED+=("automake")
           elif [ "$FOUND_VALUE" = "gpsd" ]; then
             INSTALLED+=("libgps-dev")
           elif [ "$FOUND_VALUE" = "libarchive" ]; then
             INSTALLED+=("liblzma-dev")
+          elif [ "$FOUND_VALUE" = "libssh2" ]; then
+            INSTALLED+=("libssh2-1-dev")
           fi
         fi
       done

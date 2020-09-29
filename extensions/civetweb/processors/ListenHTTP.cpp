@@ -27,11 +27,16 @@ namespace minifi {
 namespace processors {
 
 core::Property ListenHTTP::BasePath(
-    core::PropertyBuilder::createProperty("Base Path")->withDescription("Base path for incoming connections")->isRequired(false)->withDefaultValue<std::string>("contentListener")->build());
+    core::PropertyBuilder::createProperty("Base Path")
+        ->withDescription("Base path for incoming connections")
+        ->isRequired(false)
+        ->withDefaultValue<std::string>("contentListener")->build());
 
 core::Property ListenHTTP::Port(
-    core::PropertyBuilder::createProperty("Listening Port")->withDescription("The Port to listen on for incoming connections")->isRequired(true)->withDefaultValue<int>(
-        80, core::StandardValidators::PORT_VALIDATOR())->build());
+    core::PropertyBuilder::createProperty("Listening Port")
+        ->withDescription("The Port to listen on for incoming connections. 0 means port is going to be selected randomly.")
+        ->isRequired(true)
+        ->withDefaultValue<int>(80, core::StandardValidators::LISTEN_PORT_VALIDATOR())->build());
 
 core::Property ListenHTTP::AuthorizedDNPattern("Authorized DN Pattern", "A Regular Expression to apply against the Distinguished Name of incoming"
                                                " connections. If the Pattern does not match the DN, the connection will be refused.",
@@ -40,12 +45,18 @@ core::Property ListenHTTP::SSLCertificate("SSL Certificate", "File containing PE
 core::Property ListenHTTP::SSLCertificateAuthority("SSL Certificate Authority", "File containing trusted PEM-formatted certificates", "");
 
 core::Property ListenHTTP::SSLVerifyPeer(
-    core::PropertyBuilder::createProperty("SSL Verify Peer")->withDescription("Whether or not to verify the client's certificate (yes/no)")->isRequired(false)->withAllowableValue<std::string>("yes")
-        ->withAllowableValue("no")->withDefaultValue("no")->build());
+    core::PropertyBuilder::createProperty("SSL Verify Peer")
+        ->withDescription("Whether or not to verify the client's certificate (yes/no)")
+        ->isRequired(false)
+        ->withAllowableValues<std::string>({"yes", "no"})
+        ->withDefaultValue("no")->build());
 
 core::Property ListenHTTP::SSLMinimumVersion(
-    core::PropertyBuilder::createProperty("SSL Minimum Version")->withDescription("Minimum TLS/SSL version allowed (SSL2, SSL3, TLS1.0, TLS1.1, TLS1.2)")->isRequired(false)
-        ->withAllowableValue<std::string>("SSL2")->withAllowableValue("SSL3")->withAllowableValue("TLS1.0")->withAllowableValue("TLS1.1")->withAllowableValue("TLS1.2")->withDefaultValue("SSL2")->build());
+    core::PropertyBuilder::createProperty("SSL Minimum Version")
+        -> withDescription("Minimum TLS/SSL version allowed (TLS1.2)")
+        ->isRequired(false)
+        ->withAllowableValues<std::string>({"TLS1.2"})
+        ->withDefaultValue("TLS1.2")->build());
 
 core::Property ListenHTTP::HeadersAsAttributesRegex("HTTP Headers to receive as Attributes (Regex)", "Specifies the Regular Expression that determines the names of HTTP Headers that"
                                                     " should be passed along as FlowFile attributes",
@@ -83,12 +94,13 @@ void ListenHTTP::onSchedule(core::ProcessContext *context, core::ProcessSessionF
 
   basePath.insert(0, "/");
 
-  std::string listeningPort;
 
   if (!context->getProperty(Port.getName(), listeningPort)) {
     logger_->log_error("%s attribute is missing or invalid", Port.getName());
     return;
   }
+
+  bool randomPort = listeningPort == "0";
 
   std::string authDNPattern;
 
@@ -135,7 +147,7 @@ void ListenHTTP::onSchedule(core::ProcessContext *context, core::ProcessSessionF
 
   auto numThreads = getMaxConcurrentTasks();
 
-  logger_->log_info("ListenHTTP starting HTTP server on port %s and path %s with %d threads", listeningPort, basePath, numThreads);
+  logger_->log_info("ListenHTTP starting HTTP server on port %s and path %s with %d threads", randomPort ? "random" : listeningPort, basePath, numThreads);
 
   // Initialize web server
   std::vector<std::string> options;
@@ -170,31 +182,34 @@ void ListenHTTP::onSchedule(core::ProcessContext *context, core::ProcessSessionF
       options.emplace_back("yes");
     }
 
-    if (sslMinVer == "SSL2") {
-      options.emplace_back("ssl_protocol_version");
-      options.emplace_back(std::to_string(0));
-    } else if (sslMinVer == "SSL3") {
-      options.emplace_back("ssl_protocol_version");
-      options.emplace_back(std::to_string(1));
-    } else if (sslMinVer == "TLS1.0") {
-      options.emplace_back("ssl_protocol_version");
-      options.emplace_back(std::to_string(2));
-    } else if (sslMinVer == "TLS1.1") {
-      options.emplace_back("ssl_protocol_version");
-      options.emplace_back(std::to_string(3));
-    } else {
+    if (sslMinVer == "TLS1.2") {
       options.emplace_back("ssl_protocol_version");
       options.emplace_back(std::to_string(4));
+    } else {
+      throw minifi::Exception(ExceptionType::PROCESSOR_EXCEPTION, "Invalid SSL Minimum Version specified!");
     }
   }
 
-  server_.reset(new CivetServer(options));
+  server_.reset(new CivetServer(options, &callbacks_, &logger_));
   handler_.reset(new Handler(basePath, context, sessionFactory, std::move(authDNPattern), std::move(headersAsAttributesPattern)));
   server_->addHandler(basePath, handler_.get());
+
+  if (randomPort) {
+    const auto& vec = server_->getListeningPorts();
+    if (vec.size() != 1) {
+      logger_->log_error("Random port is set, but there is no listening port! Server most probably failed to start!");
+    } else {
+      bool is_secure = isSecure();
+      listeningPort = std::to_string(vec[0]);
+      if (is_secure) {
+        listeningPort += "s";
+      }
+      logger_->log_info("Listening on port %s", listeningPort);
+    }
+  }
 }
 
-ListenHTTP::~ListenHTTP() {
-}
+ListenHTTP::~ListenHTTP() = default;
 
 void ListenHTTP::onTrigger(core::ProcessContext *context, core::ProcessSession *session) {
   std::shared_ptr<FlowFileRecord> flow_file = std::static_pointer_cast<FlowFileRecord>(session->get());
@@ -268,7 +283,7 @@ bool ListenHTTP::Handler::handlePost(CivetServer *server, struct mg_connection *
       logger_->log_error("ListenHTTP handling POST resulted in a null request");
       return false;
   }
-  logger_->log_debug("ListenHTTP handling POST request of length %ll", req_info->content_length);
+  logger_->log_debug("ListenHTTP handling POST request of length %lld", req_info->content_length);
 
   if (!auth_request(conn, req_info)) {
     return true;
@@ -368,7 +383,25 @@ bool ListenHTTP::Handler::handleGet(CivetServer *server, struct mg_connection *c
   return true;
 }
 
-void ListenHTTP::Handler::write_body(mg_connection *conn, const mg_request_info *req_info) {
+bool ListenHTTP::Handler::handleHead(CivetServer *server, struct mg_connection *conn) {
+  auto req_info = mg_get_request_info(conn);
+  if (!req_info) {
+    logger_->log_error("ListenHTTP handling HEAD resulted in a null request");
+    return false;
+  }
+  logger_->log_debug("ListenHTTP handling HEAD request of URI %s", req_info->request_uri);
+
+  if (!auth_request(conn, req_info)) {
+    return true;
+  }
+
+  mg_printf(conn, "HTTP/1.1 200 OK\r\n");
+  write_body(conn, req_info, false /*include_payload*/);
+
+  return true;
+}
+
+void ListenHTTP::Handler::write_body(mg_connection *conn, const mg_request_info *req_info, bool include_payload /*=true*/) {
   const auto &request_uri_str = std::string(req_info->request_uri);
 
   if (request_uri_str.size() > base_uri_.size() + 1) {
@@ -392,8 +425,9 @@ void ListenHTTP::Handler::write_body(mg_connection *conn, const mg_request_info 
       mg_printf(conn, "Content-length: ");
       mg_printf(conn, "%s", std::to_string(response.body.size()).c_str());
       mg_printf(conn, "\r\n\r\n");
-      mg_printf(conn, "%s", response.body.c_str());
-
+      if (include_payload) {
+        mg_printf(conn, "%s", response.body.c_str());
+      }
     } else {
       logger_->log_debug("No response body available for URI: %s", req_info->request_uri);
       mg_printf(conn, "Content-length: 0\r\n\r\n");
@@ -439,6 +473,22 @@ int64_t ListenHTTP::WriteCallback::process(std::shared_ptr<io::BaseStream> strea
   }
 
   return nlen;
+}
+
+bool ListenHTTP::isSecure() const {
+  return (listeningPort.length() > 0) && *listeningPort.rbegin() == 's';
+}
+
+std::string ListenHTTP::getPort() const {
+  if(isSecure()) {
+    return listeningPort.substr(0, listeningPort.length() -1);
+  }
+  return listeningPort;
+}
+
+void ListenHTTP::notifyStop() {
+  server_.reset();
+  handler_.reset();
 }
 
 } /* namespace processors */

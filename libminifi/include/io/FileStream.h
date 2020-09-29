@@ -15,15 +15,14 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#ifndef LIBMINIFI_INCLUDE_IO_TLS_FILESTREAM_H_
-#define LIBMINIFI_INCLUDE_IO_TLS_FILESTREAM_H_
+#ifndef LIBMINIFI_INCLUDE_IO_FILESTREAM_H_
+#define LIBMINIFI_INCLUDE_IO_FILESTREAM_H_
 
-#include <iostream>
-#include <cstdint>
+#include <memory>
+#include <vector>
+#include <fstream>
 #include <string>
-#include "EndianCheck.h"
 #include "BaseStream.h"
-#include "Serializable.h"
 #include "core/logging/LoggerConfiguration.h"
 
 namespace org {
@@ -50,21 +49,23 @@ class FileStream : public io::BaseStream {
   /**
    * File Stream constructor that accepts an fstream shared pointer.
    * It must already be initialized for read and write.
+   * @param path path to file
+   * @param append identifies if this is an append or overwriting the file
    */
-  explicit FileStream(const std::string &path);
+  explicit FileStream(const std::string &path, bool append = false);
 
-  virtual ~FileStream() {
+  ~FileStream() override {
     closeStream();
   }
 
-  virtual void closeStream();
+  void closeStream() override;
   /**
    * Skip to the specified offset.
    * @param offset offset to which we will skip
    */
-  void seek(uint64_t offset);
+  void seek(uint64_t offset) override;
 
-  const uint64_t getSize() const {
+  const uint64_t getSize() const override {
     return length_;
   }
 
@@ -74,13 +75,13 @@ class FileStream : public io::BaseStream {
    * @param buf buffer in which we extract data
    * @param buflen
    */
-  virtual int readData(std::vector<uint8_t> &buf, int buflen);
+  int readData(std::vector<uint8_t> &buf, int buflen) override;
   /**
    * Reads data and places it into buf
    * @param buf buffer in which we extract data
    * @param buflen
    */
-  virtual int readData(uint8_t *buf, int buflen);
+  int readData(uint8_t *buf, int buflen) override;
 
   /**
    * Write value to the stream using std::vector
@@ -95,7 +96,7 @@ class FileStream : public io::BaseStream {
    * @param value value to write
    * @param size size of value
    */
-  virtual int writeData(uint8_t *value, int size);
+  int writeData(uint8_t *value, int size) override;
 
   /**
    * Returns the underlying buffer
@@ -106,7 +107,6 @@ class FileStream : public io::BaseStream {
   }
 
  protected:
-
   /**
    * Creates a vector and returns the vector using the provided
    * type name.
@@ -114,7 +114,16 @@ class FileStream : public io::BaseStream {
    * @returns vector.
    */
   template<typename T>
-  std::vector<uint8_t> readBuffer(const T&);
+  std::vector<uint8_t> readBuffer(const T& t);
+
+  /**
+   * Populates the vector using the provided type name.
+   * @param buf output buffer
+   * @param t incoming object
+   * @returns number of bytes read.
+   */
+  template<typename T>
+  int readBuffer(std::vector<uint8_t>& buf, const T& t);
   std::recursive_mutex file_lock_;
   std::unique_ptr<std::fstream> file_stream_;
   size_t offset_;
@@ -122,15 +131,13 @@ class FileStream : public io::BaseStream {
   size_t length_;
 
  private:
-
   std::shared_ptr<logging::Logger> logger_;
-
 };
 
-} /* namespace io */
-} /* namespace minifi */
-} /* namespace nifi */
-} /* namespace apache */
-} /* namespace org */
+}  // namespace io
+}  // namespace minifi
+}  // namespace nifi
+}  // namespace apache
+}  // namespace org
 
-#endif /* LIBMINIFI_INCLUDE_IO_TLS_FILESTREAM_H_ */
+#endif  // LIBMINIFI_INCLUDE_IO_FILESTREAM_H_

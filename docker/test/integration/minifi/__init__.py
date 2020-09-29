@@ -27,6 +27,9 @@ import os
 import yaml
 from copy import copy
 
+import time
+from collections import OrderedDict
+
 
 class Cluster(object):
     """
@@ -64,7 +67,7 @@ class SingleNodeDockerCluster(Cluster):
         self.minifi_root = '/opt/minifi/nifi-minifi-cpp-' + self.minifi_version
         self.nifi_root = '/opt/nifi/nifi-' + self.nifi_version
         self.network = None
-        self.containers = []
+        self.containers = OrderedDict()
         self.images = []
         self.tmp_files = []
 
@@ -93,12 +96,22 @@ class SingleNodeDockerCluster(Cluster):
         if self.network is None:
             net_name = 'nifi-' + str(uuid.uuid4())
             logging.info('Creating network: %s', net_name)
-            self.network = self.client.networks.create(net_name)
+            # Set IP
+            ipam_pool = docker.types.IPAMPool(
+                subnet='192.168.42.0/24',
+                gateway='192.168.42.1'
+            )
+            ipam_config = docker.types.IPAMConfig(
+                pool_configs=[ipam_pool]
+            )
+            self.network = self.client.networks.create(net_name, ipam=ipam_config)
 
         if engine == 'nifi':
             self.deploy_nifi_flow(flow, name, vols)
         elif engine == 'minifi-cpp':
             self.deploy_minifi_cpp_flow(flow, name, vols)
+        elif engine == 'kafka-broker':
+            self.deploy_kafka_broker(name)
         else:
             raise Exception('invalid flow engine: \'%s\'' % engine)
 
@@ -148,7 +161,7 @@ class SingleNodeDockerCluster(Cluster):
 
         logging.info('Started container \'%s\'', container.name)
 
-        self.containers.append(container)
+        self.containers[container.name] = container
 
     def deploy_nifi_flow(self, flow, name, vols):
         dockerfile = dedent("""FROM {base_image}
@@ -198,7 +211,35 @@ class SingleNodeDockerCluster(Cluster):
 
         logging.info('Started container \'%s\'', container.name)
 
-        self.containers.append(container)
+        self.containers[container.name] = container
+
+    def deploy_kafka_broker(self, name):
+        dockerfile = dedent("""FROM {base_image}
+                USER root
+                CMD $KAFKA_HOME/bin/kafka-console-consumer.sh --bootstrap-server host.docker.internal:9092 --topic test > heaven_signal.txt
+                """.format(base_image='spotify/kafka:latest'))
+
+        logging.info('Creating and running docker container for kafka broker...')
+
+        broker = self.client.containers.run(
+                    self.client.images.pull("spotify/kafka:latest"),
+                    detach=True,
+                    name='kafka-broker',
+                    ports={'2181/tcp': 2181, '9092/tcp': 9092},
+                    environment=["ADVERTISED_HOST=192.168.42.4", "ADVERTISED_PORT=9092"]
+                    )
+        self.network.connect(broker, ipv4_address='192.168.42.4')
+
+        configured_image = self.build_image(dockerfile, [])
+        consumer = self.client.containers.run(
+                    configured_image[0],
+                    detach=True,
+                    name='kafka-consumer',
+                    network=self.network.name
+                    )
+
+        self.containers[consumer.name] = consumer
+        self.containers[broker.name] = broker
 
     def build_image(self, dockerfile, context_files):
         conf_dockerfile_buffer = BytesIO()
@@ -211,7 +252,7 @@ class SingleNodeDockerCluster(Cluster):
 
             with tarfile.open(mode='w', fileobj=docker_context_buffer) as docker_context:
                 dockerfile_info = tarfile.TarInfo('Dockerfile')
-                dockerfile_info.size = len(conf_dockerfile_buffer.getvalue())
+                dockerfile_info.size = conf_dockerfile_buffer.getbuffer().nbytes
                 docker_context.addfile(dockerfile_info,
                                        fileobj=conf_dockerfile_buffer)
 
@@ -227,6 +268,7 @@ class SingleNodeDockerCluster(Cluster):
                                                         custom_context=True,
                                                         rm=True,
                                                         forcerm=True)
+            logging.info('Created image with id: %s', configured_image[0].id)
             self.images.append(configured_image)
 
         finally:
@@ -247,7 +289,7 @@ class SingleNodeDockerCluster(Cluster):
         """
 
         # Clean up containers
-        for container in self.containers:
+        for container in self.containers.values():
             logging.info('Cleaning up container: %s', container.name)
             container.remove(v=True, force=True)
 
@@ -285,6 +327,8 @@ class Connectable(object):
 
         self.connections = {}
         self.out_proc = self
+
+        self.drop_empty_flowfiles = False
 
     def connect(self, connections):
         for rel in connections:
@@ -329,6 +373,15 @@ class Connectable(object):
             connected.out_proc = other
 
         return connected
+
+    def __invert__(self):
+        """
+        Invert operation to set empty file filtering on incoming connections
+        GetFile('/input') >> ~LogAttribute()
+        """
+        self.drop_empty_flowfiles = True
+
+        return self
 
 
 class Processor(Connectable):
@@ -421,20 +474,12 @@ class DebugFlow(Processor):
     def __init__(self, ):
         super(DebugFlow, self).__init__('DebugFlow')
 
-class HashAttribute(Processor):
-    def __init__(self, attributename):
-        super(HashAttribute, self).__init__('HashAttribute',
-                                           properties={'Hash Value Attribute Key': attributename},
-                                           auto_terminate=['failure'])
-
 class AttributesToJSON(Processor):
     def __init__(self, destination, attributes):
         super(AttributesToJSON, self).__init__('AttributesToJSON',
                                       properties={'Destination': destination, 'Attributes List': attributes},
                                       schedule={'scheduling period': '0 sec'},
                                       auto_terminate=['failure'])
-        
-
 class GetFile(Processor):
     def __init__(self, input_dir):
         super(GetFile, self).__init__('GetFile',
@@ -462,6 +507,14 @@ class PutFile(Processor):
             return 'Directory'
         else:
             return key
+
+class PublishKafka(Processor):
+    def __init__(self):
+        super(PublishKafka, self).__init__('PublishKafka',
+                                           properties={'Client Name': 'nghiaxlee', 'Known Brokers': '192.168.42.4:9092', 'Topic Name': 'test',
+                                                       'Batch Size': '10', 'Compress Codec': 'none', 'Delivery Guarantee': '1',
+                                                       'Request Timeout': '10 sec', 'Message Timeout': '5 sec'},
+                                           auto_terminate=['success'])
 
 
 class InputPort(Connectable):
@@ -557,7 +610,7 @@ def minifi_flow_yaml(connectable, root=None, visited=None):
                 'id': str(group.uuid),
                 'url': group.url,
                 'timeout': '30 sec',
-                'yield period': '10 sec',
+                'yield period': '3 sec',
                 'Input Ports': []
             }
 
@@ -605,7 +658,8 @@ def minifi_flow_yaml(connectable, root=None, visited=None):
                     'name': str(uuid.uuid4()),
                     'source id': str(connectable.uuid),
                     'source relationship name': conn_name,
-                    'destination id': str(proc.uuid)
+                    'destination id': str(proc.uuid),
+                    'drop empty': ("true" if proc.drop_empty_flowfiles else "false")
                 })
                 if proc not in visited:
                     minifi_flow_yaml(proc, res, visited)

@@ -35,9 +35,7 @@ namespace repository {
 class StringAppender : public rocksdb::AssociativeMergeOperator {
  public:
   // Constructor: specify delimiter
-  explicit StringAppender() {
-
-  }
+  explicit StringAppender() = default;
 
   virtual bool Merge(const rocksdb::Slice& key, const rocksdb::Slice* existing_value, const rocksdb::Slice& value, std::string* new_value, rocksdb::Logger* logger) const {
     // Clear the *new_value for writing.
@@ -86,7 +84,7 @@ class DatabaseContentRepository : public core::ContentRepository, public core::C
 
   virtual void stop();
 
-  virtual std::shared_ptr<io::BaseStream> write(const std::shared_ptr<minifi::ResourceClaim> &claim);
+  virtual std::shared_ptr<io::BaseStream> write(const std::shared_ptr<minifi::ResourceClaim> &claim, bool append = false);
 
   virtual std::shared_ptr<io::BaseStream> read(const std::shared_ptr<minifi::ResourceClaim> &claim);
 

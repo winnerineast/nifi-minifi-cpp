@@ -18,12 +18,15 @@
  * limitations under the License.
  */
 #include "PublishMQTT.h"
+
 #include <stdio.h>
 #include <algorithm>
 #include <memory>
 #include <string>
 #include <map>
 #include <set>
+#include <cinttypes>
+
 #include "utils/TimeUtil.h"
 #include "utils/StringUtils.h"
 #include "core/ProcessContext.h"
@@ -38,36 +41,27 @@ namespace processors {
 core::Property PublishMQTT::Retain("Retain", "Retain MQTT published record in broker", "false");
 core::Property PublishMQTT::MaxFlowSegSize("Max Flow Segment Size", "Maximum flow content payload segment size for the MQTT record", "");
 
+core::Relationship PublishMQTT::Success("success", "FlowFiles that are sent successfully to the destination are transferred to this relationship");
+core::Relationship PublishMQTT::Failure("failure", "FlowFiles that failed to send to the destination are transferred to this relationship");
+
 void PublishMQTT::initialize() {
   // Set the supported properties
-  std::set<core::Property> properties;
-  properties.insert(BrokerURL);
-  properties.insert(CleanSession);
-  properties.insert(ClientID);
-  properties.insert(UserName);
-  properties.insert(PassWord);
-  properties.insert(KeepLiveInterval);
-  properties.insert(ConnectionTimeOut);
-  properties.insert(QOS);
-  properties.insert(Topic);
+  std::set<core::Property> properties(AbstractMQTTProcessor::getSupportedProperties());
   properties.insert(Retain);
   properties.insert(MaxFlowSegSize);
   setSupportedProperties(properties);
   // Set the supported relationships
-  std::set<core::Relationship> relationships;
-  relationships.insert(Success);
-  relationships.insert(Failure);
-  setSupportedRelationships(relationships);
+  setSupportedRelationships({Success, Failure});
 }
 
-void PublishMQTT::onSchedule(core::ProcessContext *context, core::ProcessSessionFactory *sessionFactory) {
-  AbstractMQTTProcessor::onSchedule(context, sessionFactory);
+void PublishMQTT::onSchedule(const std::shared_ptr<core::ProcessContext> &context, const std::shared_ptr<core::ProcessSessionFactory> &factory) {
+  AbstractMQTTProcessor::onSchedule(context, factory);
   std::string value;
   int64_t valInt;
   value = "";
   if (context->getProperty(MaxFlowSegSize.getName(), value) && !value.empty() && core::Property::StringToInt(value, valInt)) {
     max_seg_size_ = valInt;
-    logger_->log_debug("PublishMQTT: max flow segment size [%ll]", max_seg_size_);
+    logger_->log_debug("PublishMQTT: max flow segment size [%" PRIu64 "]", max_seg_size_);
   }
   value = "";
   if (context->getProperty(Retain.getName(), value) && !value.empty() && org::apache::nifi::minifi::utils::StringUtils::StringToBool(value, retain_)) {
@@ -76,15 +70,15 @@ void PublishMQTT::onSchedule(core::ProcessContext *context, core::ProcessSession
 }
 
 void PublishMQTT::onTrigger(const std::shared_ptr<core::ProcessContext> &context, const std::shared_ptr<core::ProcessSession> &session) {
+  if (!reconnect()) {
+    logger_->log_error("MQTT connect to %s failed", uri_);
+    yield();
+    return;
+  }
+	
   std::shared_ptr<core::FlowFile> flowFile = session->get();
 
   if (!flowFile) {
-    return;
-  }
-
-  if (!reconnect()) {
-    logger_->log_error("MQTT connect to %s failed", uri_);
-    session->transfer(flowFile, Failure);
     return;
   }
 

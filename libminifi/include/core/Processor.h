@@ -15,36 +15,39 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#ifndef __PROCESSOR_H__
-#define __PROCESSOR_H__
+#ifndef LIBMINIFI_INCLUDE_CORE_PROCESSOR_H_
+#define LIBMINIFI_INCLUDE_CORE_PROCESSOR_H_
 
-#include <uuid/uuid.h>
-#include <vector>
-#include <queue>
-#include <map>
-#include <mutex>
-#include <memory>
-#include <condition_variable>
-#include <atomic>
-#include <algorithm>
-#include <set>
-#include <chrono>
-#include <functional>
-
-#include "Core.h"
 #include <utils/Id.h>
-#include "Connectable.h"
+
+#include <algorithm>
+#include <atomic>
+#include <chrono>
+#include <condition_variable>
+#include <functional>
+#include <map>
+#include <memory>
+#include <mutex>
+#include <queue>
+#include <set>
+#include <stack>
+#include <string>
+#include <vector>
+#include <unordered_set>
+#include <unordered_map>
+
 #include "ConfigurableComponent.h"
-#include "io/StreamFactory.h"
-#include "Property.h"
-#include "utils/TimeUtil.h"
-#include "Relationship.h"
+#include "Connectable.h"
 #include "Connection.h"
+#include "Core.h"
+#include "io/StreamFactory.h"
 #include "ProcessContext.h"
 #include "ProcessSession.h"
 #include "ProcessSessionFactory.h"
+#include "Property.h"
+#include "Relationship.h"
 #include "Scheduling.h"
-#include <stack>
+#include "utils/TimeUtil.h"
 
 namespace org {
 namespace apache {
@@ -60,7 +63,6 @@ namespace core {
 #define BUILDING_DLL 1
 // Processor Class
 class Processor : public Connectable, public ConfigurableComponent, public std::enable_shared_from_this<Processor> {
-
  public:
   // Constructor
   /*!
@@ -69,13 +71,13 @@ class Processor : public Connectable, public ConfigurableComponent, public std::
 
   Processor(std::string name, utils::Identifier &uuid);
 
-  Processor(std::string name);
+  Processor(std::string name); // NOLINT
   // Destructor
   virtual ~Processor() {
     notifyStop();
   }
 
-  bool isRunning();
+  bool isRunning() override;
   // Set Processor Scheduled State
   void setScheduledState(ScheduledState state);
   // Get Processor Scheduled State
@@ -101,9 +103,9 @@ class Processor : public Connectable, public ConfigurableComponent, public std::
   // Set Processor Scheduling Period in Nano Second
   void setSchedulingPeriodNano(uint64_t period) {
     uint64_t minPeriod = MINIMUM_SCHEDULING_NANOS;
-	// std::max has some variances on c++11-c++14 and then c++14 onward.
-    // to avoid macro conditional checks we can use this simple conditional expr. 
-	scheduling_period_nano_ = period > minPeriod ? period : minPeriod; 
+    // std::max has some variances on c++11-c++14 and then c++14 onward.
+    // to avoid macro conditional checks we can use this simple conditional expr.
+  scheduling_period_nano_ = period > minPeriod ? period : minPeriod;
   }
   // Get Processor Scheduling Period in Nano Second
   uint64_t getSchedulingPeriodNano(void) {
@@ -182,7 +184,7 @@ class Processor : public Connectable, public ConfigurableComponent, public std::
     active_tasks_ = 0;
   }
   // Yield based on the yield period
-  void yield() {
+  void yield() override {
     yield_expiration_ = (getTimeMillis() + yield_period_msec_);
   }
   // Yield based on the input time
@@ -220,7 +222,7 @@ class Processor : public Connectable, public ConfigurableComponent, public std::
   // Remove connection
   void removeConnection(std::shared_ptr<Connectable> connection);
   // Get the UUID as string
-  std::string getUUIDStr() {
+  std::string getUUIDStr() const {
     return uuidStr_;
   }
   // Get the Next RoundRobin incoming connection
@@ -231,21 +233,19 @@ class Processor : public Connectable, public ConfigurableComponent, public std::
 
   void onTrigger(ProcessContext *context, ProcessSessionFactory *sessionFactory);
 
-  virtual bool canEdit() {
+  bool canEdit() override {
     return !isRunning();
   }
 
  public:
-
   // OnTrigger method, implemented by NiFi Processor Designer
   virtual void onTrigger(const std::shared_ptr<ProcessContext> &context, const std::shared_ptr<ProcessSession> &session) {
     onTrigger(context.get(), session.get());
   }
-  virtual void onTrigger(ProcessContext *context, ProcessSession *session){
-
+  virtual void onTrigger(ProcessContext *context, ProcessSession *session) {
   }
   // Initialize, overridden by NiFi Process Designer
-  virtual void initialize() {
+  void initialize() override {
   }
   // Scheduled event hook, overridden by NiFi Process Designer
   virtual void onSchedule(const std::shared_ptr<ProcessContext> &context, const std::shared_ptr<ProcessSessionFactory> &sessionFactory) {
@@ -254,21 +254,28 @@ class Processor : public Connectable, public ConfigurableComponent, public std::
   virtual void onSchedule(ProcessContext *context, ProcessSessionFactory *sessionFactory) {
   }
 
+  // Hook executed when onSchedule fails (throws). Configuration should be reset in this
+  virtual void onUnSchedule() {
+    notifyStop();
+  }
+
   // Check all incoming connections for work
-  bool isWorkAvailable();
+  bool isWorkAvailable() override;
 
   void setStreamFactory(std::shared_ptr<minifi::io::StreamFactory> stream_factory) {
     stream_factory_ = stream_factory;
   }
 
-  virtual bool supportsDynamicProperties() {
+  bool supportsDynamicProperties() override {
     return false;
   }
 
+  bool isThrottledByBackpressure() const;
+
+  std::shared_ptr<Connectable> pickIncomingConnection() override;
+
  protected:
-
   virtual void notifyStop() {
-
   }
 
   std::shared_ptr<minifi::io::StreamFactory> stream_factory_;
@@ -293,7 +300,6 @@ class Processor : public Connectable, public ConfigurableComponent, public std::
   std::string cron_period_;
 
  private:
-
   // Mutex for protection
   std::mutex mutex_;
   // Yield Expiration
@@ -305,14 +311,27 @@ class Processor : public Connectable, public ConfigurableComponent, public std::
   Processor &operator=(const Processor &parent);
 
  private:
+  static std::mutex& getGraphMutex() {
+    static std::mutex mutex{};
+    return mutex;
+  }
+
+  // must hold the graphMutex
+  void updateReachability(const std::lock_guard<std::mutex>& graph_lock, bool force = false);
+
+  static bool partOfCycle(const std::shared_ptr<Connection>& conn);
+
+  // an outgoing connection allows us to reach these nodes
+  std::unordered_map<std::shared_ptr<Connection>, std::unordered_set<std::shared_ptr<const Processor>>> reachable_processors_;
+
   std::shared_ptr<logging::Logger> logger_;
 };
 
-}
+}  // namespace core
 /* namespace core */
-} /* namespace minifi */
-} /* namespace nifi */
-} /* namespace apache */
-} /* namespace org */
+}  // namespace minifi
+}  // namespace nifi
+}  // namespace apache
+}  // namespace org
 
-#endif
+#endif  // LIBMINIFI_INCLUDE_CORE_PROCESSOR_H_

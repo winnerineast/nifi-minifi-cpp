@@ -19,16 +19,9 @@
 #include <string>
 #include "utils/StringUtils.h"
 #include "utils/file/FileUtils.h"
+#include "utils/file/PathUtils.h"
 #include "core/Core.h"
 #include "core/logging/LoggerConfiguration.h"
-
-#ifndef FILE_SEPARATOR_C
-#ifdef WIN32
-#define FILE_SEPARATOR_C '\\'
-#else
-#define FILE_SEPARATOR_C '/'
-#endif
-#endif
 
 namespace org {
 namespace apache {
@@ -37,12 +30,13 @@ namespace minifi {
 
 #define TRACE_BUFFER_SIZE 512
 
-Properties::Properties()
-    : logger_(logging::LoggerFactory<Properties>::getLogger()) {
+Properties::Properties(const std::string& name)
+    : logger_(logging::LoggerFactory<Properties>::getLogger()),
+    name_(name) {
 }
 
 // Get the config value
-bool Properties::get(const std::string &key, std::string &value) {
+bool Properties::get(const std::string &key, std::string &value) const {
   std::lock_guard<std::mutex> lock(mutex_);
   auto it = properties_.find(key);
 
@@ -54,7 +48,7 @@ bool Properties::get(const std::string &key, std::string &value) {
   }
 }
 
-bool Properties::get(const std::string &key, const std::string &alternate_key, std::string &value) {
+bool Properties::get(const std::string &key, const std::string &alternate_key, std::string &value) const {
   std::lock_guard<std::mutex> lock(mutex_);
   auto it = properties_.find(key);
 
@@ -73,15 +67,11 @@ bool Properties::get(const std::string &key, const std::string &alternate_key, s
   }
 }
 
-int Properties::getInt(const std::string &key, int default_value) {
+int Properties::getInt(const std::string &key, int default_value) const {
   std::lock_guard<std::mutex> lock(mutex_);
   auto it = properties_.find(key);
 
-  if (it != properties_.end()) {
-    return std::atol(it->second.c_str());
-  } else {
-    return default_value;
-  }
+  return it != properties_.end() ? std::stoi(it->second) : default_value;
 }
 
 // Parse one line in configure file like key=value
@@ -92,7 +82,7 @@ bool Properties::parseConfigureFileLine(char *buf, std::string &prop_key, std::s
     ++line;
 
   char first = line[0];
-  if ((first == '\0') || (first == '#') || (first == '\r') || (first == '\n') || (first == '=')) {
+  if ((first == '\0') || (first == '#') || (first == '[')  || (first == '\r') || (first == '\n') || (first == '=')) {
     return true;
   }
 
@@ -122,32 +112,18 @@ bool Properties::parseConfigureFileLine(char *buf, std::string &prop_key, std::s
 
 // Load Configure File
 void Properties::loadConfigureFile(const char *fileName) {
-  std::string adjustedFilename;
-  if (fileName) {
-    // perform a naive determination if this is a relative path
-    if (fileName[0] != FILE_SEPARATOR_C) {
-      adjustedFilename = adjustedFilename + getHome() + FILE_SEPARATOR_C + fileName;
-    } else {
-      if (adjustedFilename.empty()) {
-        adjustedFilename = getHome();
-      }
-      adjustedFilename += fileName;
-    }
+  if (NULL == fileName) {
+    logger_->log_error("Configuration file path for %s is a nullptr!", getName().c_str());
+    return;
   }
-  char *path = NULL;
-#ifndef WIN32
-  char full_path[PATH_MAX];
-  path = realpath(adjustedFilename.c_str(), full_path);
-#else
-  path = const_cast<char*>(adjustedFilename.c_str());
-#endif
-  logger_->log_info("Using configuration file located at %s, from %s", path, fileName);
 
-  properties_file_ = path;
+  properties_file_ = utils::file::PathUtils::getFullPath(utils::file::FileUtils::concat_path(getHome(), fileName));
 
-  std::ifstream file(path, std::ifstream::in);
+  logger_->log_info("Using configuration file to load configuration for %s from %s (located at %s)", getName().c_str(), fileName, properties_file_);
+
+  std::ifstream file(properties_file_, std::ifstream::in);
   if (!file.good()) {
-    logger_->log_error("load configure file failed %s", path);
+    logger_->log_error("load configure file failed %s", properties_file_);
     return;
   }
   this->clear();
@@ -165,7 +141,7 @@ void Properties::loadConfigureFile(const char *fileName) {
 bool Properties::validateConfigurationFile(const std::string &configFile) {
   std::ifstream file(configFile, std::ifstream::in);
   if (!file.good()) {
-    logger_->log_error("load configure file failed %s", configFile);
+    logger_->log_error("Failed to load configuration file %s to configure %s", configFile, getName().c_str());
     return false;
   }
 
@@ -173,6 +149,7 @@ bool Properties::validateConfigurationFile(const std::string &configFile) {
   for (file.getline(buf, TRACE_BUFFER_SIZE); file.good(); file.getline(buf, TRACE_BUFFER_SIZE)) {
     std::string key, value;
     if (!parseConfigureFileLine(buf, key, value)) {
+      logger_->log_error("While loading configuration for %s found invalid line: %s", getName().c_str(), buf);
       return false;
     }
   }
@@ -203,11 +180,13 @@ bool Properties::persistProperties() {
 
     char first = line[0];
 
-    if ((first == '\0') || (first == '#') || (first == '\r') || (first == '\n') || (first == '=')) {
+    if ((first == '\0') || (first == '#') || (first == '[') || (first == '\r') || (first == '\n') || (first == '=')) {
       // persist comments and newlines
       output_file << line << std::endl;
       continue;
     }
+
+
 
     char *equal = strchr(line, '=');
     if (equal == NULL) {
@@ -228,13 +207,11 @@ bool Properties::persistProperties() {
       continue;
     }
 
-    std::string value = equal;
-    value = org::apache::nifi::minifi::utils::StringUtils::replaceEnvironmentVariables(value);
     key = org::apache::nifi::minifi::utils::StringUtils::trimRight(key);
-    value = org::apache::nifi::minifi::utils::StringUtils::trimRight(value);
+    std::string value = org::apache::nifi::minifi::utils::StringUtils::trimRight(equal);
     auto hasIt = properties_copy.find(key);
     if (hasIt != properties_copy.end() && !value.empty()) {
-      output_file << key << "=" << hasIt->second << std::endl;
+      output_file << key << "=" << value << std::endl;
     }
     properties_copy.erase(key);
   }

@@ -28,6 +28,8 @@ const char *Configure::nifi_flow_configuration_file = "nifi.flow.configuration.f
 const char *Configure::nifi_flow_configuration_file_exit_failure = "nifi.flow.configuration.file.exit.onfailure";
 const char *Configure::nifi_flow_configuration_file_backup_update = "nifi.flow.configuration.backup.on.update";
 const char *Configure::nifi_flow_engine_threads = "nifi.flow.engine.threads";
+const char *Configure::nifi_flow_engine_alert_period = "nifi.flow.engine.alert.period";
+const char *Configure::nifi_flow_engine_event_driven_time_slice = "nifi.flow.engine.event.driven.time.slice";
 const char *Configure::nifi_administrative_yield_duration = "nifi.administrative.yield.duration";
 const char *Configure::nifi_bored_yield_duration = "nifi.bored.yield.duration";
 const char *Configure::nifi_graceful_shutdown_seconds = "nifi.flowcontroller.graceful.shutdown.period";
@@ -60,6 +62,10 @@ const char *Configure::nifi_c2_file_watch = "nifi.c2.file.watch";
 const char *Configure::nifi_c2_flow_id = "nifi.c2.flow.id";
 const char *Configure::nifi_c2_flow_url = "nifi.c2.flow.url";
 const char *Configure::nifi_c2_flow_base_url = "nifi.c2.flow.base.url";
+const char *Configure::nifi_c2_full_heartbeat = "nifi.c2.full.heartbeat";
+const char *Configure::nifi_state_management_provider_local = "nifi.state.management.provider.local";
+const char *Configure::nifi_state_management_provider_local_always_persist = "nifi.state.management.provider.local.always.persist";
+const char *Configure::nifi_state_management_provider_local_auto_persistence_interval = "nifi.state.management.provider.local.auto.persistence.interval";
 
 } /* namespace minifi */
 } /* namespace nifi */

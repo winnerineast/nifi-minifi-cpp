@@ -18,6 +18,9 @@
 #ifndef LIBMINIFI_INCLUDE_CORE_CONTROLLER_CONTROLLERSERVICEMAP_H_
 #define LIBMINIFI_INCLUDE_CORE_CONTROLLER_CONTROLLERSERVICEMAP_H_
 
+#include <memory>
+#include <set>
+#include <vector>
 #include <map>
 #include <string>
 #include "ControllerServiceNode.h"
@@ -39,12 +42,9 @@ namespace controller {
  */
 class ControllerServiceMap {
  public:
+  ControllerServiceMap() = default;
 
-  ControllerServiceMap() {
-  }
-
-  virtual ~ControllerServiceMap() {
-  }
+  virtual ~ControllerServiceMap() = default;
 
   /**
    * Gets the controller service node using the <code>id</code>
@@ -89,9 +89,9 @@ class ControllerServiceMap {
     return true;
   }
 
-  void clear(){
+  void clear() {
     std::lock_guard<std::mutex> lock(mutex_);
-    for(const auto &node : controller_services_list_){
+    for (const auto &node : controller_services_list_) {
       node->disable();
     }
     controller_services_.clear();
@@ -115,11 +115,11 @@ class ControllerServiceMap {
   std::map<std::string, std::shared_ptr<ControllerServiceNode>> controller_services_;
 };
 
-} /* namespace controller */
-} /* namespace core */
-} /* namespace minifi */
-} /* namespace nifi */
-} /* namespace apache */
-} /* namespace org */
+}  // namespace controller
+}  // namespace core
+}  // namespace minifi
+}  // namespace nifi
+}  // namespace apache
+}  // namespace org
 
-#endif /* LIBMINIFI_INCLUDE_CORE_CONTROLLER_CONTROLLERSERVICEMAP_H_ */
+#endif  // LIBMINIFI_INCLUDE_CORE_CONTROLLER_CONTROLLERSERVICEMAP_H_

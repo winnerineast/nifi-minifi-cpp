@@ -53,7 +53,9 @@
 #include "core/logging/LoggerConfiguration.h"
 #include "core/Connectable.h"
 #include "utils/HTTPClient.h"
+#include "utils/GeneralUtils.h"
 #include "io/NetworkPrioritizer.h"
+#include "io/validation.h"
 
 #ifdef _MSC_VER
 #ifndef PATH_MAX
@@ -66,24 +68,20 @@ namespace apache {
 namespace nifi {
 namespace minifi {
 
-std::shared_ptr<utils::IdGenerator> FlowController::id_generator_ = utils::IdGenerator::getIdGenerator();
-
 #define DEFAULT_CONFIG_NAME "conf/config.yml"
 
 FlowController::FlowController(std::shared_ptr<core::Repository> provenance_repo, std::shared_ptr<core::Repository> flow_file_repo, std::shared_ptr<Configure> configure,
                                std::unique_ptr<core::FlowConfiguration> flow_configuration, std::shared_ptr<core::ContentRepository> content_repo, const std::string name, bool headless_mode)
     : core::controller::ControllerServiceProvider(core::getClassName<FlowController>()),
       root_(nullptr),
-      max_timer_driven_threads_(0),
-      max_event_driven_threads_(0),
       running_(false),
       updating_(false),
       c2_enabled_(true),
       initialized_(false),
       provenance_repo_(provenance_repo),
       flow_file_repo_(flow_file_repo),
-      protocol_(0),
       controller_service_map_(std::make_shared<core::controller::ControllerServiceMap>()),
+      thread_pool_(2, false, nullptr, "Flowcontroller threadpool"),
       timer_scheduler_(nullptr),
       event_scheduler_(nullptr),
       cron_scheduler_(nullptr),
@@ -99,22 +97,19 @@ FlowController::FlowController(std::shared_ptr<core::Repository> provenance_repo
   if (IsNullOrEmpty(configuration_)) {
     throw std::runtime_error("Must supply a configuration.");
   }
-  id_generator_->generate(uuid_);
+  utils::IdGenerator::getIdGenerator()->generate(uuid_);
   setUUID(uuid_);
-
   flow_update_ = false;
   // Setup the default values
   if (flow_configuration_ != nullptr) {
     configuration_filename_ = flow_configuration_->getConfigurationPath();
   }
-  max_event_driven_threads_ = DEFAULT_MAX_EVENT_DRIVEN_THREAD;
-  max_timer_driven_threads_ = DEFAULT_MAX_TIMER_DRIVEN_THREAD;
   running_ = false;
   initialized_ = false;
   c2_initialized_ = false;
   root_ = nullptr;
 
-  protocol_ = new FlowControlProtocol(this, configure);
+  protocol_ = utils::make_unique<FlowControlProtocol>(this, configure);
 
   if (!headless_mode) {
     std::string rawConfigFileString;
@@ -176,11 +171,16 @@ void FlowController::initializePaths(const std::string &adjustedFilename) {
 
 FlowController::~FlowController() {
   stop(true);
+  stopC2();
   unload();
-  if (NULL != protocol_)
-    delete protocol_;
+  protocol_ = nullptr;
   flow_file_repo_ = nullptr;
   provenance_repo_ = nullptr;
+}
+
+void FlowController::stopC2() {
+  if (c2_agent_)
+    c2_agent_->stop();
 }
 
 bool FlowController::applyConfiguration(const std::string &source, const std::string &configurePayload) {
@@ -241,12 +241,22 @@ int16_t FlowController::stop(bool force, uint64_t timeToWait) {
     logger_->log_info("Stop Flow Controller");
     if (this->root_)
       this->root_->stopProcessing(timer_scheduler_, event_scheduler_, cron_scheduler_);
-    this->flow_file_repo_->stop();
-    this->provenance_repo_->stop();
     // stop after we've attempted to stop the processors.
     this->timer_scheduler_->stop();
     this->event_scheduler_->stop();
     this->cron_scheduler_->stop();
+    thread_pool_.shutdown();
+    /* STOP! Before you change it, consider the following:
+     * -Stopping the schedulers doesn't actually quit the onTrigger functions of processors
+     * -They only guarantee that the processors are not scheduled any more
+     * -After the threadpool is stopped we can make sure that processors don't need repos and controllers anymore */
+    if (this->root_) {
+      this->root_->drainConnections();
+    }
+    this->flow_file_repo_->stop();
+    this->provenance_repo_->stop();
+    // stop the ControllerServices
+    this->controller_service_provider_->disableAllControllerServices();
     running_ = false;
   }
   return 0;
@@ -285,8 +295,6 @@ void FlowController::unload() {
     initialized_ = false;
     name_ = "";
   }
-
-  return;
 }
 
 void FlowController::load(const std::shared_ptr<core::ProcessGroup> &root, bool reload) {
@@ -313,21 +321,25 @@ void FlowController::load(const std::shared_ptr<core::ProcessGroup> &root, bool 
 
     controller_service_provider_ = flow_configuration_->getControllerServiceProvider();
 
-    if (nullptr == timer_scheduler_ || reload) {
-      timer_scheduler_ = std::make_shared<TimerDrivenSchedulingAgent>(
-          std::static_pointer_cast<core::controller::ControllerServiceProvider>(std::dynamic_pointer_cast<FlowController>(shared_from_this())), provenance_repo_, flow_file_repo_, content_repo_,
-          configuration_);
+    auto base_shared_ptr = std::dynamic_pointer_cast<core::controller::ControllerServiceProvider>(shared_from_this());
+
+    if (!thread_pool_.isRunning() || reload) {
+      thread_pool_.shutdown();
+      thread_pool_.setMaxConcurrentTasks(configuration_->getInt(Configure::nifi_flow_engine_threads, 2));
+      thread_pool_.setControllerServiceProvider(base_shared_ptr);
+      thread_pool_.start();
     }
+
+    if (nullptr == timer_scheduler_ || reload) {
+      timer_scheduler_ = std::make_shared<TimerDrivenSchedulingAgent>(base_shared_ptr, provenance_repo_, flow_file_repo_, content_repo_, configuration_, thread_pool_);
+    }
+
     if (nullptr == event_scheduler_ || reload) {
-      event_scheduler_ = std::make_shared<EventDrivenSchedulingAgent>(
-          std::static_pointer_cast<core::controller::ControllerServiceProvider>(std::dynamic_pointer_cast<FlowController>(shared_from_this())), provenance_repo_, flow_file_repo_, content_repo_,
-          configuration_);
+      event_scheduler_ = std::make_shared<EventDrivenSchedulingAgent>(base_shared_ptr, provenance_repo_, flow_file_repo_, content_repo_, configuration_, thread_pool_);
     }
 
     if (nullptr == cron_scheduler_ || reload) {
-      cron_scheduler_ = std::make_shared<CronDrivenSchedulingAgent>(
-          std::static_pointer_cast<core::controller::ControllerServiceProvider>(std::dynamic_pointer_cast<FlowController>(shared_from_this())), provenance_repo_, flow_file_repo_, content_repo_,
-          configuration_);
+      cron_scheduler_ = std::make_shared<CronDrivenSchedulingAgent>(base_shared_ptr, provenance_repo_, flow_file_repo_, content_repo_, configuration_, thread_pool_);
     }
 
     std::static_pointer_cast<core::controller::StandardControllerServiceProvider>(controller_service_provider_)->setRootGroup(root_);
@@ -397,6 +409,7 @@ int16_t FlowController::start() {
       this->protocol_->start();
       this->provenance_repo_->start();
       this->flow_file_repo_->start();
+      thread_pool_.start();
       logger_->log_info("Started Flow Controller");
     }
     return 0;
@@ -413,6 +426,7 @@ void FlowController::initializeC2() {
 
   // don't need to worry about the return code, only whether class_str is defined.
   configuration_->get("nifi.c2.agent.class", "c2.agent.class", class_str);
+  configuration_->setAgentClass(class_str);
 
   if (configuration_->get(Configure::nifi_c2_enable, "c2.enable", c2_enable_str)) {
     bool enable_c2 = true;
@@ -446,27 +460,17 @@ void FlowController::initializeC2() {
     // set to the flow controller's identifier
     identifier_str = uuidStr_;
   }
+  configuration_->setAgentIdentifier(identifier_str);
 
-  if (!c2_initialized_) {
-    configuration_->setAgentIdentifier(identifier_str);
-    state::StateManager::initialize();
-    std::shared_ptr<c2::C2Agent> agent = std::make_shared<c2::C2Agent>(std::dynamic_pointer_cast<FlowController>(shared_from_this()), std::dynamic_pointer_cast<FlowController>(shared_from_this()),
-                                                                       configuration_);
-    registerUpdateListener(agent, agent->getHeartBeatDelay());
-
-    state::StateManager::startMetrics(agent->getHeartBeatDelay());
-
-    c2_initialized_ = true;
-  } else {
-    if (!flow_update_) {
-      return;
-    }
+  if (c2_initialized_ && !flow_update_) {
+    return;
   }
+
   device_information_.clear();
   component_metrics_.clear();
   component_metrics_by_id_.clear();
-  std::string class_csv;
 
+  std::string class_csv;
   if (root_ != nullptr) {
     std::shared_ptr<state::response::QueueMetrics> queueMetrics = std::make_shared<state::response::QueueMetrics>();
 
@@ -600,6 +604,14 @@ void FlowController::initializeC2() {
   }
 
   loadC2ResponseConfiguration();
+
+  if (!c2_initialized_) {
+    c2_agent_ = std::unique_ptr<c2::C2Agent>(new c2::C2Agent(std::dynamic_pointer_cast<FlowController>(shared_from_this()),
+                                                             std::dynamic_pointer_cast<FlowController>(shared_from_this()),
+                                                             configuration_));
+    c2_agent_->start();
+    c2_initialized_ = true;
+  }
 }
 
 void FlowController::loadC2ResponseConfiguration(const std::string &prefix) {
@@ -769,7 +781,7 @@ void FlowController::removeControllerService(const std::shared_ptr<core::control
  * Enables the controller service services
  * @param serviceNode service node which will be disabled, along with linked services.
  */
-std::future<uint64_t> FlowController::enableControllerService(std::shared_ptr<core::controller::ControllerServiceNode> &serviceNode) {
+std::future<utils::TaskRescheduleInfo> FlowController::enableControllerService(std::shared_ptr<core::controller::ControllerServiceNode> &serviceNode) {
   return controller_service_provider_->enableControllerService(serviceNode);
 }
 
@@ -784,8 +796,15 @@ void FlowController::enableControllerServices(std::vector<std::shared_ptr<core::
  * Disables controller services
  * @param serviceNode service node which will be disabled, along with linked services.
  */
-std::future<uint64_t> FlowController::disableControllerService(std::shared_ptr<core::controller::ControllerServiceNode> &serviceNode) {
+std::future<utils::TaskRescheduleInfo> FlowController::disableControllerService(std::shared_ptr<core::controller::ControllerServiceNode> &serviceNode) {
   return controller_service_provider_->disableControllerService(serviceNode);
+}
+
+/**
+ * Removes all controller services.
+ */
+void FlowController::clearControllerServices() {
+  controller_service_provider_->clearControllerServices();
 }
 
 /**
@@ -884,6 +903,13 @@ void FlowController::enableAllControllerServices() {
   controller_service_provider_->enableAllControllerServices();
 }
 
+/**
+ * Disables all controller services for the provider.
+ */
+void FlowController::disableAllControllerServices() {
+  controller_service_provider_->disableAllControllerServices();
+}
+
 int16_t FlowController::applyUpdate(const std::string &source, const std::string &configuration) {
   if (applyConfiguration(source, configuration)) {
     return 1;
@@ -900,35 +926,50 @@ int16_t FlowController::clearConnection(const std::string &connection) {
     auto conn = connections.find(connection);
     if (conn != connections.end()) {
       logger_->log_info("Clearing connection %s", connection);
-      conn->second->drain();
+      conn->second->drain(true);
     }
   }
   return -1;
 }
 
-int16_t FlowController::getResponseNodes(std::vector<std::shared_ptr<state::response::ResponseNode>> &metric_vector, uint16_t metricsClass) {
+std::shared_ptr<state::response::ResponseNode> FlowController::getMetricsNode(const std::string& metricsClass) const {
   std::lock_guard<std::mutex> lock(metrics_mutex_);
-
-  for (auto metric : root_response_nodes_) {
-    metric_vector.push_back(metric.second);
-  }
-
-  return 0;
-}
-
-int16_t FlowController::getMetricsNodes(std::vector<std::shared_ptr<state::response::ResponseNode>> &metric_vector, uint16_t metricsClass) {
-  std::lock_guard<std::mutex> lock(metrics_mutex_);
-  if (metricsClass == 0) {
-    for (auto metric : device_information_) {
-      metric_vector.push_back(metric.second);
+  if (!metricsClass.empty()) {
+    const auto citer = component_metrics_.find(metricsClass);
+    if (citer != component_metrics_.end()) {
+      return citer->second;
     }
   } else {
-    auto metrics = component_metrics_by_id_[metricsClass];
-    for (const auto &metric : metrics) {
-      metric_vector.push_back(metric);
+    const auto iter = root_response_nodes_.find("metrics");
+    if (iter != root_response_nodes_.end()) {
+      return iter->second;
     }
   }
-  return 0;
+  return nullptr;
+}
+
+std::vector<std::shared_ptr<state::response::ResponseNode>> FlowController::getHeartbeatNodes(bool includeManifest) const {
+  std::string fullHb{"true"};
+  configuration_->get("nifi.c2.full.heartbeat", fullHb);
+  const bool include = includeManifest ? true : (fullHb == "true");
+
+  std::vector<std::shared_ptr<state::response::ResponseNode>> nodes;
+  for (const auto& entry : root_response_nodes_) {
+    auto identifier = std::dynamic_pointer_cast<state::response::AgentIdentifier>(entry.second);
+    if (identifier) {
+      identifier->includeAgentManifest(include);
+    }
+    nodes.push_back(entry.second);
+  }
+  return nodes;
+}
+
+std::shared_ptr<state::response::ResponseNode> FlowController::getAgentManifest() const {
+  auto agentInfo = std::make_shared<state::response::AgentInformation>("agentInfo");
+  agentInfo->setIdentifier(configuration_->getAgentIdentifier());
+  agentInfo->setAgentClass(configuration_->getAgentClass());
+  agentInfo->includeAgentStatus(false);
+  return agentInfo;
 }
 
 std::vector<std::shared_ptr<state::StateController>> FlowController::getAllComponents() {
@@ -990,14 +1031,7 @@ uint64_t FlowController::getUptime() {
 }
 
 std::vector<BackTrace> FlowController::getTraces() {
-  std::vector<BackTrace> traces;
-  auto timer_driven = timer_scheduler_->getTraces();
-  traces.insert(traces.end(), std::make_move_iterator(timer_driven.begin()), std::make_move_iterator(timer_driven.end()));
-  auto event_driven = event_scheduler_->getTraces();
-  traces.insert(traces.end(), std::make_move_iterator(event_driven.begin()), std::make_move_iterator(event_driven.end()));
-  auto cron_driven = cron_scheduler_->getTraces();
-  traces.insert(traces.end(), std::make_move_iterator(cron_driven.begin()), std::make_move_iterator(cron_driven.end()));
-  // repositories
+  std::vector<BackTrace> traces{thread_pool_.getTraces()};
   auto prov_repo_trace = provenance_repo_->getTraces();
   traces.emplace_back(std::move(prov_repo_trace));
   auto flow_repo_trace = flow_file_repo_->getTraces();
@@ -1007,7 +1041,7 @@ std::vector<BackTrace> FlowController::getTraces() {
   return traces;
 }
 
-} /* namespace minifi */
-} /* namespace nifi */
-} /* namespace apache */
-} /* namespace org */
+}  // namespace minifi
+}  // namespace nifi
+}  // namespace apache
+}  // namespace org

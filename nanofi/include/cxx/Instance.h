@@ -27,6 +27,7 @@
 #include "RemoteProcessorGroupPort.h"
 #include "core/ContentRepository.h"
 #include "core/repository/VolatileContentRepository.h"
+#include "core/repository/FileSystemRepository.h"
 #include "core/Repository.h"
 
 #include "C2CallbackAgent.h"
@@ -40,6 +41,8 @@
 #include "ReflexiveSession.h"
 #include "utils/ThreadPool.h"
 #include "core/state/UpdateController.h"
+#include "core/file_utils.h"
+
 namespace org {
 namespace apache {
 namespace nifi {
@@ -63,14 +66,21 @@ class ProcessorLink {
 class Instance {
  public:
 
-  explicit Instance(const std::string &url, const std::string &port)
-      : configure_(std::make_shared<Configure>()),
+  explicit Instance(const std::string &url, const std::string &port, const std::string &repo_class_name = "")
+      : no_op_repo_(std::make_shared<minifi::core::Repository>()),
         url_(url),
-        agent_(nullptr),
-        rpgInitialized_(false),
-        listener_thread_pool_(1),
-        content_repo_(std::make_shared<minifi::core::repository::VolatileContentRepository>()),
-        no_op_repo_(std::make_shared<minifi::core::Repository>()) {
+        configure_(std::make_shared<Configure>()) {
+
+    if (repo_class_name == "filesystemrepository") {
+        content_repo_ = std::make_shared<minifi::core::repository::FileSystemRepository>();
+    } else {
+        content_repo_ = std::make_shared<minifi::core::repository::VolatileContentRepository>();
+    }
+    char * cwd = get_current_working_directory();
+    if (cwd) {
+        configure_->setHome(std::string(cwd));
+        free(cwd);
+    }
     running_ = false;
     stream_factory_ = minifi::io::StreamFactory::getInstance(configure_);
     utils::Identifier uuid;
@@ -118,7 +128,7 @@ class Instance {
     return no_op_repo_;
   }
 
-  std::shared_ptr<minifi::core::ContentRepository> getContentRepository() {
+  std::shared_ptr<minifi::core::ContentRepository> getContentRepository() const {
     return content_repo_;
   }
 
@@ -145,9 +155,8 @@ class Instance {
     // run all functions independently
 
     for (auto function : functions) {
-      std::unique_ptr<utils::AfterExecute<state::Update>> after_execute = std::unique_ptr<utils::AfterExecute<state::Update>>(new state::UpdateRunner(running_, delay));
-      utils::Worker<state::Update> functor(function, "listeners", std::move(after_execute));
-      std::future<state::Update> future;
+      utils::Worker<utils::TaskRescheduleInfo> functor(function, "listeners");
+      std::future<utils::TaskRescheduleInfo> future;
       if (!listener_thread_pool_.execute(std::move(functor), future)) {
         // denote failure
         return false;
@@ -158,12 +167,11 @@ class Instance {
 
   std::shared_ptr<c2::C2CallbackAgent> agent_;
 
-  std::atomic<bool> running_;
+  std::atomic<bool> running_{ false };
 
-  bool rpgInitialized_;
+  bool rpgInitialized_{ false };
 
   std::shared_ptr<minifi::core::Repository> no_op_repo_;
-
   std::shared_ptr<minifi::core::ContentRepository> content_repo_;
 
   std::shared_ptr<core::ProcessorNode> proc_node_;
@@ -172,7 +180,7 @@ class Instance {
   std::string url_;
   std::shared_ptr<Configure> configure_;
 
-  utils::ThreadPool<state::Update> listener_thread_pool_;
+  utils::ThreadPool<utils::TaskRescheduleInfo> listener_thread_pool_;
 };
 
 } /* namespace minifi */

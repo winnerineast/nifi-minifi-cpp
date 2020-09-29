@@ -17,9 +17,12 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#ifndef __REMOTE_PROCESSOR_GROUP_PORT_H__
-#define __REMOTE_PROCESSOR_GROUP_PORT_H__
+#ifndef LIBMINIFI_INCLUDE_REMOTEPROCESSORGROUPPORT_H_
+#define LIBMINIFI_INCLUDE_REMOTEPROCESSORGROUPPORT_H_
 
+#include <string>
+#include <utility>
+#include <vector>
 #include <mutex>
 #include <memory>
 #include <stack>
@@ -46,7 +49,7 @@ namespace minifi {
  */
 class RPGLatch {
  public:
-  RPGLatch(bool increment = true) {
+  RPGLatch(bool increment = true) { // NOLINT
     static std::atomic<int> latch_count(0);
     count = &latch_count;
     if (increment)
@@ -78,7 +81,7 @@ class RemoteProcessorGroupPort : public core::Processor {
   /*!
    * Create a new processor
    */
-  RemoteProcessorGroupPort(const std::shared_ptr<io::StreamFactory> &stream_factory, std::string name, std::string url, const std::shared_ptr<Configure> &configure, utils::Identifier uuid = utils::Identifier())
+  RemoteProcessorGroupPort(const std::shared_ptr<io::StreamFactory> &stream_factory, std::string name, std::string url, const std::shared_ptr<Configure> &configure, utils::Identifier uuid = utils::Identifier()) // NOLINT
       : core::Processor(name, uuid),
         configure_(configure),
         direction_(sitetosite::SEND),
@@ -97,9 +100,7 @@ class RemoteProcessorGroupPort : public core::Processor {
     setURL(url);
   }
   // Destructor
-  virtual ~RemoteProcessorGroupPort() {
-
-  }
+  virtual ~RemoteProcessorGroupPort() = default;
 
   // Processor Name
   static const char *ProcessorName;
@@ -108,8 +109,10 @@ class RemoteProcessorGroupPort : public core::Processor {
   static core::Property SSLContext;
   static core::Property port;
   static core::Property portUUID;
+  static core::Property idleTimeout;
   // Supported Relationships
   static core::Relationship relation;
+
  public:
   virtual void onSchedule(const std::shared_ptr<core::ProcessContext> &context, const std::shared_ptr<core::ProcessSessionFactory> &sessionFactory);
   // OnTrigger method, implemented by NiFi RemoteProcessorGroupPort
@@ -146,7 +149,7 @@ class RemoteProcessorGroupPort : public core::Processor {
     for (auto url : urls) {
       logger_->log_trace("Parsing %s", url);
       std::string host, protocol;
-      int port;
+      int port = -1;
       url = utils::StringUtils::trim(url);
       utils::parse_url(&url, &host, &port, &protocol);
       logger_->log_trace("Parsed -%s- %s %s, %d", url, protocol, host, port);
@@ -157,7 +160,7 @@ class RemoteProcessorGroupPort : public core::Processor {
           port = 80;
         }
       }
-      nifi_instances_.push_back( { host, port, protocol });
+      nifi_instances_.push_back({ host, port, protocol });
     }
   }
   void setHTTPProxy(const utils::HTTPProxy &proxy) {
@@ -179,7 +182,6 @@ class RemoteProcessorGroupPort : public core::Processor {
   }
 
  protected:
-
   /**
    * Non static in case anything is loaded when this object is re-scheduled
    */
@@ -211,6 +213,8 @@ class RemoteProcessorGroupPort : public core::Processor {
 
   utils::Identifier protocol_uuid_;
 
+  std::chrono::milliseconds idle_timeout_{15000};
+
   // rest API end point info
   std::vector<struct RPG> nifi_instances_;
 
@@ -238,8 +242,8 @@ class RemoteProcessorGroupPort : public core::Processor {
   static const char* RPG_SSL_CONTEXT_SERVICE_NAME;
 };
 
-} /* namespace minifi */
-} /* namespace nifi */
-} /* namespace apache */
-} /* namespace org */
-#endif
+}  // namespace minifi
+}  // namespace nifi
+}  // namespace apache
+}  // namespace org
+#endif  // LIBMINIFI_INCLUDE_REMOTEPROCESSORGROUPPORT_H_

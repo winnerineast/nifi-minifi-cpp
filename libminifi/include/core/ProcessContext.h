@@ -15,27 +15,31 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#ifndef __PROCESS_CONTEXT_H__
-#define __PROCESS_CONTEXT_H__
+#ifndef LIBMINIFI_INCLUDE_CORE_PROCESSCONTEXT_H_
+#define LIBMINIFI_INCLUDE_CORE_PROCESSCONTEXT_H_
 
-#include <uuid/uuid.h>
+#include <string>
 #include <vector>
 #include <queue>
 #include <map>
+#include <unordered_map>
 #include <mutex>
 #include <atomic>
 #include <algorithm>
 #include <memory>
-#include <expression/Expression.h>
 #include "Property.h"
+#include "core/Core.h"
 #include "core/ContentRepository.h"
 #include "core/repository/FileSystemRepository.h"
 #include "core/controller/ControllerServiceProvider.h"
 #include "core/controller/ControllerServiceLookup.h"
 #include "core/logging/LoggerConfiguration.h"
+#include "controllers/keyvalue/AbstractAutoPersistingKeyValueStoreService.h"
 #include "ProcessorNode.h"
 #include "core/Repository.h"
 #include "core/FlowFile.h"
+#include "core/CoreComponentState.h"
+#include "utils/file/FileUtils.h"
 #include "VariableRegistry.h"
 
 namespace org {
@@ -47,7 +51,6 @@ namespace core {
 // ProcessContext Class
 class ProcessContext : public controller::ControllerServiceLookup, public core::VariableRegistry, public std::enable_shared_from_this<VariableRegistry> {
  public:
-
   // Constructor
   /*!
    * Create a new process context associated with the processor/controller service/state manager
@@ -59,8 +62,11 @@ class ProcessContext : public controller::ControllerServiceLookup, public core::
         flow_repo_(flow_repo),
         content_repo_(content_repo),
         processor_node_(processor),
-        logger_(logging::LoggerFactory<ProcessContext>::getLogger()) {
+        logger_(logging::LoggerFactory<ProcessContext>::getLogger()),
+        configure_(std::make_shared<minifi::Configure>()),
+        initialized_(false) {
     repo_ = repo;
+    state_manager_provider_ = getStateManagerProvider(logger_, controller_service_provider_, nullptr);
   }
 
   // Constructor
@@ -75,12 +81,17 @@ class ProcessContext : public controller::ControllerServiceLookup, public core::
         flow_repo_(flow_repo),
         content_repo_(content_repo),
         processor_node_(processor),
-        logger_(logging::LoggerFactory<ProcessContext>::getLogger()) {
+        logger_(logging::LoggerFactory<ProcessContext>::getLogger()),
+        configure_(configuration),
+        initialized_(false) {
     repo_ = repo;
+    state_manager_provider_ = getStateManagerProvider(logger_, controller_service_provider_, configuration);
+    if (!configure_) {
+      configure_ = std::make_shared<minifi::Configure>();
+    }
   }
   // Destructor
-  virtual ~ProcessContext() {
-  }
+  virtual ~ProcessContext() = default;
   // Get Processor associated with the Process Context
   std::shared_ptr<ProcessorNode> getProcessorNode() const {
     return processor_node_;
@@ -91,11 +102,15 @@ class ProcessContext : public controller::ControllerServiceLookup, public core::
     return getPropertyImp<typename std::common_type<T>::type>(name, value);
   }
 
-  bool getProperty(const Property &property, std::string &value, const std::shared_ptr<FlowFile> &flow_file);
+  virtual bool getProperty(const Property &property, std::string &value, const std::shared_ptr<FlowFile> &flow_file) {
+    return getProperty(property.getName(), value);
+  }
   bool getDynamicProperty(const std::string &name, std::string &value) const {
     return processor_node_->getDynamicProperty(name, value);
   }
-  bool getDynamicProperty(const Property &property, std::string &value, const std::shared_ptr<FlowFile> &flow_file);
+  virtual bool getDynamicProperty(const Property &property, std::string &value, const std::shared_ptr<FlowFile> &flow_file) {
+    return getDynamicProperty(property.getName(), value);
+  }
   std::vector<std::string> getDynamicPropertyKeys() const {
     return processor_node_->getDynamicPropertyKeys();
   }
@@ -193,8 +208,122 @@ class ProcessContext : public controller::ControllerServiceLookup, public core::
     return controller_service_provider_->getControllerServiceName(identifier);
   }
 
- private:
+  void initializeContentRepository(const std::string& home) {
+      configure_->setHome(home);
+      content_repo_->initialize(configure_);
+      initialized_ = true;
+  }
 
+  bool isInitialized() const {
+      return initialized_;
+  }
+
+  static constexpr char const* DefaultStateManagerProviderName = "defaultstatemanagerprovider";
+
+  std::shared_ptr<CoreComponentStateManager> getStateManager() {
+    if (state_manager_provider_ == nullptr) {
+      return nullptr;
+    }
+    return state_manager_provider_->getCoreComponentStateManager(*processor_node_);
+  }
+
+  static std::shared_ptr<core::CoreComponentStateManagerProvider> getOrCreateDefaultStateManagerProvider(
+      std::shared_ptr<controller::ControllerServiceProvider> controller_service_provider,
+      std::shared_ptr<minifi::Configure> configuration,
+      const char *base_path = "") {
+    static std::mutex mutex;
+    std::lock_guard<std::mutex> lock(mutex);
+
+    /* See if we have already created a default provider */
+    std::shared_ptr<core::controller::ControllerServiceNode> node = controller_service_provider->getControllerServiceNode(DefaultStateManagerProviderName);
+    if (node != nullptr) {
+      return std::dynamic_pointer_cast<core::CoreComponentStateManagerProvider>(node->getControllerServiceImplementation());
+    }
+
+    /* Try to get configuration options for default provider */
+    std::string always_persist, auto_persistence_interval;
+    configuration->get(Configure::nifi_state_management_provider_local_always_persist, always_persist);
+    configuration->get(Configure::nifi_state_management_provider_local_auto_persistence_interval, auto_persistence_interval);
+
+    /* Function to help creating a provider */
+    auto create_provider = [&](
+        const std::string& type,
+        const std::string& longType,
+        const std::unordered_map<std::string, std::string>& extraProperties) -> std::shared_ptr<core::CoreComponentStateManagerProvider> {
+      node = controller_service_provider->createControllerService(type, longType, DefaultStateManagerProviderName, true /*firstTimeAdded*/);
+      if (node == nullptr) {
+        return nullptr;
+      }
+      node->initialize();
+      auto provider = node->getControllerServiceImplementation();
+      if (provider == nullptr) {
+        return nullptr;
+      }
+      if (!always_persist.empty() && !provider->setProperty(
+          controllers::AbstractAutoPersistingKeyValueStoreService::AlwaysPersist.getName(), always_persist)) {
+        return nullptr;
+      }
+      if (!auto_persistence_interval.empty() && !provider->setProperty(
+          controllers::AbstractAutoPersistingKeyValueStoreService::AutoPersistenceInterval.getName(), auto_persistence_interval)) {
+        return nullptr;
+      }
+      for (const auto& extraProperty : extraProperties) {
+        if (!provider->setProperty(extraProperty.first, extraProperty.second)) {
+          return nullptr;
+        }
+      }
+      if (!node->enable()) {
+        return nullptr;
+      }
+      return std::dynamic_pointer_cast<core::CoreComponentStateManagerProvider>(provider);
+    };
+
+    /* Try to create a RocksDB-backed provider */
+    auto provider = create_provider("RocksDbPersistableKeyValueStoreService",
+        "org.apache.nifi.minifi.controllers.RocksDbPersistableKeyValueStoreService",
+        {{"Directory", utils::file::FileUtils::concat_path(base_path, "corecomponentstate")}});
+    if (provider != nullptr) {
+      return provider;
+    }
+
+    /* Fall back to a locked unordered map-backed provider */
+    provider = create_provider("UnorderedMapPersistableKeyValueStoreService",
+        "org.apache.nifi.minifi.controllers.UnorderedMapPersistableKeyValueStoreService",
+        {{"File", utils::file::FileUtils::concat_path(base_path, "corecomponentstate.txt")}});
+    if (provider != nullptr) {
+      return provider;
+    }
+
+    /* Give up */
+    return nullptr;
+  }
+
+  static std::shared_ptr<core::CoreComponentStateManagerProvider> getStateManagerProvider(
+      std::shared_ptr<logging::Logger> logger,
+      std::shared_ptr<controller::ControllerServiceProvider> controller_service_provider,
+      std::shared_ptr<minifi::Configure> configuration) {
+    if (controller_service_provider == nullptr) {
+      return nullptr;
+    }
+    std::string id;
+    if (configuration != nullptr && configuration->get(minifi::Configure::nifi_state_management_provider_local, id)) {
+      auto node = controller_service_provider->getControllerServiceNode(id);
+      if (node == nullptr) {
+        logger->log_error("Failed to find the CoreComponentStateManagerProvider %s defined by %s", id, minifi::Configure::nifi_state_management_provider_local);
+        return nullptr;
+      } else {
+        return std::dynamic_pointer_cast<core::CoreComponentStateManagerProvider>(node->getControllerServiceImplementation());
+      }
+    } else {
+      auto state_manager_provider = getOrCreateDefaultStateManagerProvider(controller_service_provider, configuration);
+      if (state_manager_provider == nullptr) {
+        logger->log_error("Failed to create default CoreComponentStateManagerProvider");
+      }
+      return state_manager_provider;
+    }
+  }
+
+ private:
   template<typename T>
   bool getPropertyImp(const std::string &name, T &value) const {
     return processor_node_->getProperty<typename std::common_type<T>::type>(name, value);
@@ -202,6 +331,8 @@ class ProcessContext : public controller::ControllerServiceLookup, public core::
 
   // controller service provider.
   std::shared_ptr<controller::ControllerServiceProvider> controller_service_provider_;
+  // state manager provider
+  std::shared_ptr<core::CoreComponentStateManagerProvider> state_manager_provider_;
   // repository shared pointer.
   std::shared_ptr<core::Repository> repo_;
   std::shared_ptr<core::Repository> flow_repo_;
@@ -211,17 +342,16 @@ class ProcessContext : public controller::ControllerServiceLookup, public core::
   // Processor
   std::shared_ptr<ProcessorNode> processor_node_;
 
-  std::map<std::string, org::apache::nifi::minifi::expression::Expression> expressions_;
-  std::map<std::string, org::apache::nifi::minifi::expression::Expression> dynamic_property_expressions_;
-
   // Logger
   std::shared_ptr<logging::Logger> logger_;
+  std::shared_ptr<Configure> configure_;
 
+  bool initialized_;
 };
 
-} /* namespace core */
-} /* namespace minifi */
-} /* namespace nifi */
-} /* namespace apache */
-} /* namespace org */
-#endif
+}  // namespace core
+}  // namespace minifi
+}  // namespace nifi
+}  // namespace apache
+}  // namespace org
+#endif  // LIBMINIFI_INCLUDE_CORE_PROCESSCONTEXT_H_

@@ -17,13 +17,15 @@
  */
 
 #include "core/repository/VolatileContentRepository.h"
-#include "core/expect.h"
+
 #include <cstdio>
-#include <string>
 #include <memory>
+#include <string>
 #include <thread>
-#include "utils/StringUtils.h"
+
+#include "core/expect.h"
 #include "io/FileStream.h"
+#include "utils/StringUtils.h"
 
 namespace org {
 namespace apache {
@@ -87,7 +89,7 @@ void VolatileContentRepository::start() {
   logger_->log_info("%s Repository Monitor Thread Start", getName());
 }
 
-std::shared_ptr<io::BaseStream> VolatileContentRepository::write(const std::shared_ptr<minifi::ResourceClaim> &claim) {
+std::shared_ptr<io::BaseStream> VolatileContentRepository::write(const std::shared_ptr<minifi::ResourceClaim> &claim, bool append) {
   logger_->log_info("enter write for %s", claim->getContentFullPath());
   {
     std::lock_guard<std::mutex> lock(map_mutex_);
@@ -194,9 +196,9 @@ bool VolatileContentRepository::remove(const std::shared_ptr<minifi::ResourceCla
   return false;
 }
 
-} /* namespace repository */
-} /* namespace core */
-} /* namespace minifi */
-} /* namespace nifi */
-} /* namespace apache */
-} /* namespace org */
+}  // namespace repository
+}  // namespace core
+}  // namespace minifi
+}  // namespace nifi
+}  // namespace apache
+}  // namespace org

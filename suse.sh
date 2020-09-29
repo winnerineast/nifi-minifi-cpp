@@ -16,7 +16,7 @@
 # specific language governing permissions and limitations
 # under the License.
 
-verify_enable() {
+verify_enable_platform() {
   feature="$1"
   feature_status=${!1}
   if [ "$OS_MAJOR" = "6" ]; then
@@ -82,13 +82,8 @@ build_deps(){
         VALUE=${cmake_opt#*:}
         if [ "$KEY" = "$option" ]; then
           FOUND_VALUE="$VALUE"
-          if [ "$FOUND_VALUE" = "libcurl" ]; then
-            INSTALLED+=("libcurl-devel")
-          elif [ "$FOUND_VALUE" = "libpcap" ]; then
+          if [ "$FOUND_VALUE" = "libpcap" ]; then
             INSTALLED+=("libpcap-devel")
-          elif [ "$FOUND_VALUE" = "openssl" ]; then
-            INSTALLED+=("openssl")
-            INSTALLED+=("openssl-devel")
           elif [ "$FOUND_VALUE" = "libusb" ]; then
             INSTALLED+=("libusb-devel")
           elif [ "$FOUND_VALUE" = "libpng" ]; then
@@ -97,7 +92,7 @@ build_deps(){
             install_bison
           elif [ "$FOUND_VALUE" = "flex" ]; then
             INSTALLED+=("flex")
-	  elif [ "$FOUND_VALUE" = "automake" ]; then
+          elif [ "$FOUND_VALUE" = "automake" ]; then
             INSTALLED+=("automake")
           elif [ "$FOUND_VALUE" = "autoconf" ]; then
             INSTALLED+=("autoconf")
@@ -111,6 +106,8 @@ build_deps(){
             INSTALLED+=("gpsd-devel")
           elif [ "$FOUND_VALUE" = "libarchive" ]; then
             INSTALLED+=("xz-devel")
+          elif [ "$FOUND_VALUE" = "libssh2" ]; then
+            INSTALLED+=("libssh2-devel")
           fi
         fi
       done

@@ -18,15 +18,20 @@
  * limitations under the License.
  */
 #include "FlowControlProtocol.h"
-#include <stdio.h>
-#include <time.h>
+
 #include <chrono>
+#include <cstdio>
+#include <ctime>
 #include <thread>
 #include <string>
 #include <random>
 #include <iostream>
+#include <cinttypes>
+
 #include "FlowController.h"
 #include "core/Core.h"
+#include "utils/gsl.h"
+
 namespace org {
 namespace apache {
 namespace nifi {
@@ -42,7 +47,7 @@ int FlowControlProtocol::sendData(uint8_t *buf, int buflen) {
 
 int FlowControlProtocol::selectClient(int msec) {
   fd_set fds;
-  struct timeval tv;
+  struct timeval tv{};
   int retval;
   int fd = _socket;
 
@@ -53,9 +58,9 @@ int FlowControlProtocol::selectClient(int msec) {
   tv.tv_usec = (msec % 1000) * 1000;
 
   if (msec > 0)
-    retval = select(fd + 1, &fds, NULL, NULL, &tv);
+    retval = select(fd + 1, &fds, nullptr, nullptr, &tv);
   else
-    retval = select(fd + 1, &fds, NULL, NULL, NULL);
+    retval = select(fd + 1, &fds, nullptr, nullptr, nullptr);
 
   if (retval <= 0)
     return retval;
@@ -121,8 +126,8 @@ void FlowControlProtocol::start() {
     return;
   running_ = true;
   logger_->log_trace("FlowControl Protocol Start");
-  _thread = new std::thread(run, this);
-  _thread->detach();
+  _thread = std::thread(run, this);
+  _thread.detach();
 }
 
 void FlowControlProtocol::stop() {
@@ -142,7 +147,6 @@ void FlowControlProtocol::run(FlowControlProtocol *protocol) {
       protocol->sendReportReq();
     }
   }
-  return;
 }
 
 int FlowControlProtocol::sendRegisterReq() {
@@ -160,11 +164,12 @@ int FlowControlProtocol::sendRegisterReq() {
     return -1;
 
   // Calculate the total payload msg size
-  uint32_t payloadSize = FlowControlMsgIDEncodingLen(FLOW_SERIAL_NUMBER, 0) + FlowControlMsgIDEncodingLen(FLOW_YML_NAME, this->_controller->getName().size() + 1);
-  uint32_t size = sizeof(FlowControlProtocolHeader) + payloadSize;
+  const auto payloadSize = FlowControlMsgIDEncodingLen(FLOW_SERIAL_NUMBER, 0) + FlowControlMsgIDEncodingLen(FLOW_YML_NAME, gsl::narrow<int>(this->_controller->getName().size() + 1));
+  const size_t size = sizeof(FlowControlProtocolHeader) + payloadSize;
 
-  uint8_t *data = new uint8_t[size];
-  uint8_t *start = data;
+  std::vector<uint8_t> buffer;
+  buffer.resize(size);
+  uint8_t *data = buffer.data();
 
   // encode the HDR
   FlowControlProtocolHeader hdr;
@@ -186,8 +191,8 @@ int FlowControlProtocol::sendRegisterReq() {
   data = this->encode(data, this->_controller->getName());
 
   // send it
-  int status = sendData(start, size);
-  delete[] start;
+  int status = sendData(buffer.data(), size);
+  buffer.clear();
   if (status <= 0) {
     close(_socket);
     _socket = 0;
@@ -205,38 +210,37 @@ int FlowControlProtocol::sendRegisterReq() {
     return -1;
   }
   logger_->log_debug("Flow Control Protocol receive MsgType %s", FlowControlMsgTypeToStr((FlowControlMsgType) hdr.msgType));
-  logger_->log_debug("Flow Control Protocol receive Seq Num %ll", hdr.seqNumber);
+  logger_->log_debug("Flow Control Protocol receive Seq Num %" PRIu32, hdr.seqNumber);
   logger_->log_debug("Flow Control Protocol receive Resp Code %s", FlowControlRespCodeToStr((FlowControlRespCode) hdr.status));
-  logger_->log_debug("Flow Control Protocol receive Payload len %ll", hdr.payloadLen);
+  logger_->log_debug("Flow Control Protocol receive Payload len %" PRIu32, hdr.payloadLen);
 
   if (hdr.status == RESP_SUCCESS && hdr.seqNumber == this->_seqNumber) {
     this->_registered = true;
     this->_seqNumber++;
     logger_->log_trace("Flow Control Protocol Register success");
-    uint8_t *payload = new uint8_t[hdr.payloadLen];
-    uint8_t *payloadPtr = payload;
-    status = readData(payload, hdr.payloadLen);
+    std::vector<uint8_t> payload;
+    payload.resize(hdr.payloadLen);
+    uint8_t *payloadPtr = payload.data();
+    status = readData(payload.data(), hdr.payloadLen);
     if (status <= 0) {
-      delete[] payload;
       logger_->log_warn("Flow Control Protocol Register Read Payload fail");
       close(_socket);
       _socket = 0;
       return -1;
     }
-    while (payloadPtr < (payload + hdr.payloadLen)) {
+    while (payloadPtr < (payload.data() + hdr.payloadLen)) {
       uint32_t msgID;
       payloadPtr = this->decode(payloadPtr, msgID);
       if (((FlowControlMsgID) msgID) == REPORT_INTERVAL) {
         // Fixed 4 bytes
         uint32_t reportInterval;
         payloadPtr = this->decode(payloadPtr, reportInterval);
-        logger_->log_debug("Flow Control Protocol receive report interval %ll ms", reportInterval);
+        logger_->log_debug("Flow Control Protocol receive report interval %" PRIu32 " ms", reportInterval);
         this->_reportInterval = reportInterval;
       } else {
         break;
       }
     }
-    delete[] payload;
     close(_socket);
     _socket = 0;
     return 0;
@@ -258,11 +262,12 @@ int FlowControlProtocol::sendReportReq() {
     return -1;
 
   // Calculate the total payload msg size
-  uint32_t payloadSize = FlowControlMsgIDEncodingLen(FLOW_YML_NAME, this->_controller->getName().size() + 1);
-  uint32_t size = sizeof(FlowControlProtocolHeader) + payloadSize;
+  uint32_t payloadSize = FlowControlMsgIDEncodingLen(FLOW_YML_NAME, gsl::narrow<int>(this->_controller->getName().size() + 1));
+  const size_t size = sizeof(FlowControlProtocolHeader) + payloadSize;
 
-  uint8_t *data = new uint8_t[size];
-  uint8_t *start = data;
+  std::vector<uint8_t> buffer;
+  buffer.resize(size);
+  auto* data = buffer.data();
 
   // encode the HDR
   FlowControlProtocolHeader hdr;
@@ -280,8 +285,8 @@ int FlowControlProtocol::sendReportReq() {
   data = this->encode(data, this->_controller->getName());
 
   // send it
-  int status = sendData(start, size);
-  delete[] start;
+  int status = sendData(buffer.data(), size);
+  buffer.clear();
   if (status <= 0) {
     close(_socket);
     _socket = 0;
@@ -299,17 +304,17 @@ int FlowControlProtocol::sendReportReq() {
     return -1;
   }
   logger_->log_debug("Flow Control Protocol receive MsgType %s", FlowControlMsgTypeToStr((FlowControlMsgType) hdr.msgType));
-  logger_->log_debug("Flow Control Protocol receive Seq Num %ll", hdr.seqNumber);
+  logger_->log_debug("Flow Control Protocol receive Seq Num %" PRIu32, hdr.seqNumber);
   logger_->log_debug("Flow Control Protocol receive Resp Code %s", FlowControlRespCodeToStr((FlowControlRespCode) hdr.status));
-  logger_->log_debug("Flow Control Protocol receive Payload len %ll", hdr.payloadLen);
+  logger_->log_debug("Flow Control Protocol receive Payload len %" PRIu32, hdr.payloadLen);
 
   if (hdr.status == RESP_SUCCESS && hdr.seqNumber == this->_seqNumber) {
     this->_seqNumber++;
-    uint8_t *payload = new uint8_t[hdr.payloadLen];
-    uint8_t *payloadPtr = payload;
-    status = readData(payload, hdr.payloadLen);
+    std::vector<uint8_t> payload;
+    payload.resize(hdr.payloadLen);
+    uint8_t *payloadPtr = payload.data();
+    status = readData(payload.data(), hdr.payloadLen);
     if (status <= 0) {
-      delete[] payload;
       logger_->log_warn("Flow Control Protocol Report Resp Read Payload fail");
       close(_socket);
       _socket = 0;
@@ -318,7 +323,7 @@ int FlowControlProtocol::sendReportReq() {
     std::string processor;
     std::string propertyName;
     std::string propertyValue;
-    while (payloadPtr < (payload + hdr.payloadLen)) {
+    while (payloadPtr < (payload.data() + hdr.payloadLen)) {
       uint32_t msgID;
       payloadPtr = this->decode(payloadPtr, msgID);
       if (((FlowControlMsgID) msgID) == PROCESSOR_NAME) {
@@ -344,7 +349,6 @@ int FlowControlProtocol::sendReportReq() {
         break;
       }
     }
-    delete[] payload;
     close(_socket);
     _socket = 0;
     return 0;
@@ -377,7 +381,7 @@ int FlowControlProtocol::sendReportReq() {
   }
 }
 
-} /* namespace minifi */
-} /* namespace nifi */
-} /* namespace apache */
-} /* namespace org */
+}  // namespace minifi
+}  // namespace nifi
+}  // namespace apache
+}  // namespace org

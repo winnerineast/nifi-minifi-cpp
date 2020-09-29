@@ -18,6 +18,10 @@
 #ifndef LIBMINIFI_INCLUDE_CORE_CONTENTREPOSITORY_H_
 #define LIBMINIFI_INCLUDE_CORE_CONTENTREPOSITORY_H_
 
+#include <map>
+#include <memory>
+#include <string>
+
 #include "properties/Configure.h"
 #include "ResourceClaim.h"
 #include "io/DataStream.h"
@@ -36,17 +40,14 @@ namespace core {
  */
 class ContentRepository : public StreamManager<minifi::ResourceClaim> {
  public:
-
-  virtual ~ContentRepository() {
-
-  }
+  virtual ~ContentRepository() = default;
 
   /**
    * initialize this content repository using the provided configuration.
    */
   virtual bool initialize(const std::shared_ptr<Configure> &configure) = 0;
 
-  virtual std::string getStoragePath() {
+  virtual std::string getStoragePath() const {
     return directory_;
   }
 
@@ -104,12 +105,11 @@ class ContentRepository : public StreamManager<minifi::ResourceClaim> {
     if (count != count_map_.end() && count->second > 0) {
       count_map_[str] = count->second - 1;
     } else {
-      count_map_[str] = 0;
+      count_map_.erase(str);
     }
   }
 
  protected:
-
   std::string directory_;
 
   std::mutex count_map_mutex_;
@@ -117,10 +117,10 @@ class ContentRepository : public StreamManager<minifi::ResourceClaim> {
   std::map<std::string, uint32_t> count_map_;
 };
 
-} /* namespace core */
-} /* namespace minifi */
-} /* namespace nifi */
-} /* namespace apache */
-} /* namespace org */
+}  // namespace core
+}  // namespace minifi
+}  // namespace nifi
+}  // namespace apache
+}  // namespace org
 
-#endif /* LIBMINIFI_INCLUDE_CORE_CONTENTREPOSITORY_H_ */
+#endif  // LIBMINIFI_INCLUDE_CORE_CONTENTREPOSITORY_H_

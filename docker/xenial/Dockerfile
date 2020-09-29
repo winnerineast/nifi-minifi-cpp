@@ -26,6 +26,7 @@ ARG GID
 ARG MINIFI_VERSION
 ARG MINIFI_SOURCE_CODE
 ARG DUMP_LOCATION
+ARG ENABLE_JNI
 # Install the system dependencies needed for a build
 
 ENV USER root
@@ -33,8 +34,7 @@ ENV MINIFI_BASE_DIR /opt/minifi
 RUN mkdir -p $MINIFI_BASE_DIR 
 USER $USER
 
-RUN apt-get update && apt-get install -y openjdk-8-jdk openjdk-8-source sudo git maven
-
+RUN apt-get update && apt-get install -y openjdk-8-jdk openjdk-8-source sudo git maven autogen autoconf automake
 
 ADD $MINIFI_SOURCE_CODE $MINIFI_BASE_DIR
 
@@ -52,5 +52,5 @@ RUN cd $MINIFI_BASE_DIR \
 	&& rm -rf build \ 
 	&& mkdir build \
 	&& cd build \
-	&& cmake -DUSE_SHARED_LIBS= -DENABLE_LIBRDKAFKA=ON -DPORTABLE=ON -DENABLE_COAP=ON -DCMAKE_BUILD_TYPE=Release -DSKIP_TESTS=true -DENABLE_JNI=ON .. \
+	&& cmake -DUSE_SHARED_LIBS=  -DENABLE_MQTT=ON -DENABLE_LIBRDKAFKA=ON -DPORTABLE=ON -DENABLE_COAP=ON -DCMAKE_BUILD_TYPE=Release -DSKIP_TESTS=true -DENABLE_JNI=$ENABLE_JNI .. \
 	&& make -j8 package 

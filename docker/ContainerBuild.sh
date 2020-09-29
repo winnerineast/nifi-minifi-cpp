@@ -18,6 +18,9 @@
 
 #!/bin/bash
 
+# Fail on errors
+set -e
+
 # Set env vars.
 UID_ARG=$1
 GID_ARG=$2
@@ -26,6 +29,7 @@ MINIFI_SOURCE_CODE=$4
 CMAKE_SOURCE_DIR=$5
 DUMP_LOCATION=$6
 DISTRO_NAME=$7
+ENABLE_JNI=$8
 
 echo "NiFi-MiNiFi-CPP Version: $MINIFI_VERSION"
 echo "Current Working Directory: $(pwd)"
@@ -33,6 +37,7 @@ echo "CMake Source Directory: $CMAKE_SOURCE_DIR"
 echo "MiNiFi Package: $MINIFI_SOURCE_CODE"
 
 # Copy the MiNiFi source tree to the Docker working directory before building
+rm -rf $CMAKE_SOURCE_DIR/docker/${DISTRO_NAME}/minificppsource/
 mkdir -p $CMAKE_SOURCE_DIR/docker/${DISTRO_NAME}/minificppsource
 rsync -avr \
       --exclude '/*build*' \
@@ -53,6 +58,7 @@ DOCKER_COMMAND="docker build --build-arg UID=$UID_ARG \
                              --build-arg MINIFI_VERSION=$MINIFI_VERSION \
                              --build-arg MINIFI_SOURCE_CODE=$MINIFI_SOURCE_CODE \
                              --build-arg DUMP_LOCATION=$DUMP_LOCATION \
+                             --build-arg ENABLE_JNI=$ENABLE_JNI \
                              -t \
                              apacheminificpp:${DISTRO_NAME}-$MINIFI_VERSION ."
 echo "Docker Command: '$DOCKER_COMMAND'"

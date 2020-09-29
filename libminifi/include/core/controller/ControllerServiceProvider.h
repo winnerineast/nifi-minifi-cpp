@@ -18,6 +18,9 @@
 #ifndef LIBMINIFI_INCLUDE_CORE_CONTROLLER_CONTROLLERSERVICEPROVIDER_H_
 #define LIBMINIFI_INCLUDE_CORE_CONTROLLER_CONTROLLERSERVICEPROVIDER_H_
 
+#include <memory>
+#include <string>
+#include <utility>
 #include <future>
 #include <vector>
 #include "core/Core.h"
@@ -26,6 +29,7 @@
 #include "ControllerServiceNode.h"
 #include "ControllerServiceMap.h"
 #include "core/ClassLoader.h"
+#include "utils/Monitors.h"
 
 namespace org {
 namespace apache {
@@ -36,7 +40,6 @@ namespace controller {
 
 class ControllerServiceProvider : public CoreComponent, public ConfigurableComponent, public ControllerServiceLookup {
  public:
-
   explicit ControllerServiceProvider(const std::string &name)
       : CoreComponent(name),
         ConfigurableComponent() {
@@ -61,8 +64,7 @@ class ControllerServiceProvider : public CoreComponent, public ConfigurableCompo
         controller_map_(std::move(other.controller_map_)) {
   }
 
-  virtual ~ControllerServiceProvider() {
-  }
+  virtual ~ControllerServiceProvider() = default;
 
   /**
    * Creates a controller service node wrapping the controller service
@@ -71,8 +73,7 @@ class ControllerServiceProvider : public CoreComponent, public ConfigurableCompo
    * @param id controller service identifier.
    * @return shared pointer to the controller service node.
    */
-  virtual std::shared_ptr<ControllerServiceNode> createControllerService(const std::string &type,const std::string &longType, const std::string &id,
-  bool firstTimeAdded) = 0;
+  virtual std::shared_ptr<ControllerServiceNode> createControllerService(const std::string &type, const std::string &longType, const std::string &id, bool firstTimeAdded) = 0;
 
   /**
    * Gets a controller service node wrapping the controller service
@@ -97,7 +98,7 @@ class ControllerServiceProvider : public CoreComponent, public ConfigurableCompo
    * Enables the provided controller service
    * @param serviceNode controller service node.
    */
-  virtual std::future<uint64_t> enableControllerService(std::shared_ptr<ControllerServiceNode> &serviceNode) = 0;
+  virtual std::future<utils::TaskRescheduleInfo> enableControllerService(std::shared_ptr<ControllerServiceNode> &serviceNode) = 0;
 
   /**
    * Enables the provided controller service nodes
@@ -109,7 +110,12 @@ class ControllerServiceProvider : public CoreComponent, public ConfigurableCompo
    * Disables the provided controller service node
    * @param serviceNode controller service node.
    */
-  virtual std::future<uint64_t> disableControllerService(std::shared_ptr<core::controller::ControllerServiceNode> &serviceNode) = 0;
+  virtual std::future<utils::TaskRescheduleInfo> disableControllerService(std::shared_ptr<core::controller::ControllerServiceNode> &serviceNode) = 0;
+
+  /**
+   * Removes all controller services.
+   */
+  virtual void clearControllerServices() = 0;
 
   /**
    * Gets a list of all controller services.
@@ -188,8 +194,9 @@ class ControllerServiceProvider : public CoreComponent, public ConfigurableCompo
     std::shared_ptr<ControllerServiceNode> node = getControllerServiceNode(identifier);
     if (nullptr != node) {
       return linkedServicesAre(ENABLED, node);
-    } else
+    } else {
       return false;
+    }
   }
 
   /**
@@ -200,26 +207,29 @@ class ControllerServiceProvider : public CoreComponent, public ConfigurableCompo
     std::shared_ptr<ControllerServiceNode> node = getControllerServiceNode(identifier);
     if (nullptr != node) {
       return linkedServicesAre(ENABLING, node);
-    } else
+    } else {
       return false;
+    }
   }
 
   virtual const std::string getControllerServiceName(const std::string &identifier) {
     std::shared_ptr<ControllerService> node = getControllerService(identifier);
     if (nullptr != node) {
       return node->getName();
-    } else
+    } else {
       return "";
+    }
   }
 
   virtual void enableAllControllerServices() = 0;
+
+  virtual void disableAllControllerServices() = 0;
 
   virtual bool supportsDynamicProperties() {
     return false;
   }
 
  protected:
-
   /**
    * verifies that linked services match the provided state.
    */
@@ -245,15 +255,13 @@ class ControllerServiceProvider : public CoreComponent, public ConfigurableCompo
    * @param referenceNode reference node from whcih we will find linked references.
    */
   std::vector<std::shared_ptr<core::controller::ControllerServiceNode>> findLinkedComponents(std::shared_ptr<core::controller::ControllerServiceNode> &referenceNode) {
-
     std::vector<std::shared_ptr<core::controller::ControllerServiceNode>> references;
 
     for (std::shared_ptr<core::controller::ControllerServiceNode> linked_node : referenceNode->getLinkedControllerServices()) {
       references.push_back(linked_node);
       std::vector<std::shared_ptr<core::controller::ControllerServiceNode>> linked_references = findLinkedComponents(linked_node);
 
-      auto removal_predicate = [&linked_references](std::shared_ptr<core::controller::ControllerServiceNode> key) ->bool
-      {
+      auto removal_predicate = [&linked_references](std::shared_ptr<core::controller::ControllerServiceNode> key) ->bool {
         return std::find(linked_references.begin(), linked_references.end(), key) != linked_references.end();
       };
 
@@ -265,14 +273,13 @@ class ControllerServiceProvider : public CoreComponent, public ConfigurableCompo
   }
 
   std::shared_ptr<ControllerServiceMap> controller_map_;
-
 };
 
-} /* namespace controller */
-} /* namespace core */
-} /* namespace minifi */
-} /* namespace nifi */
-} /* namespace apache */
-} /* namespace org */
+}  // namespace controller
+}  // namespace core
+}  // namespace minifi
+}  // namespace nifi
+}  // namespace apache
+}  // namespace org
 
-#endif /* LIBMINIFI_INCLUDE_CORE_CONTROLLER_CONTROLLERSERVICEPROVIDER_H_ */
+#endif  // LIBMINIFI_INCLUDE_CORE_CONTROLLER_CONTROLLERSERVICEPROVIDER_H_

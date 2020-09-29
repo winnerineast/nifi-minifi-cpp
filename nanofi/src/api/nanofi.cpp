@@ -29,22 +29,10 @@
 #include "cxx/Plan.h"
 #include "cxx/CallbackProcessor.h"
 #include "ResourceClaim.h"
-#include "processors/GetFile.h"
 #include "core/logging/LoggerConfiguration.h"
 #include "utils/StringUtils.h"
 #include "io/DataStream.h"
 #include "core/cxxstructs.h"
-
-#define NULL_CHECK(ret_val, ...)                        \
-  do {                                                  \
-    const void *_p[] = { __VA_ARGS__ };                 \
-    int _i;                                             \
-    for (_i = 0; _i < sizeof(_p)/sizeof(*_p); _i++) {   \
-      if (_p[_i] == NULL) {                             \
-        return ret_val;                                 \
-      }                                                 \
-    }                                                   \
-  } while(0)
 
 using string_map = std::map<std::string, std::string>;
 
@@ -72,8 +60,13 @@ file_buffer file_to_buffer(const char *path) {
   rewind(fileptr);
 
   buffer = (uint8_t *)malloc((filelen+1)*sizeof(uint8_t)); // Enough memory for file + \0
-  fread(buffer, filelen, 1, fileptr);
+  const size_t read_result = fread(buffer, filelen, 1, fileptr);
   fclose(fileptr);
+
+  if (read_result != 1) {
+    free(buffer);
+    return fb;
+  }
 
   fb.buffer = buffer;
   fb.file_len = filelen;
@@ -115,7 +108,7 @@ class DirectoryConfiguration {
  * @Deprecated for API version 0.2 in favor of the following prototype
  * nifi_instance *create_instance(nifi_port const *port) {
  */
-nifi_instance *create_instance(const char *url, nifi_port *port) {
+nifi_instance *create_instance_repo(const char *url, nifi_port *port, const char* const repo_type) {
   // make sure that we have a thread safe way of initializing the content directory
   DirectoryConfiguration::initialize();
 
@@ -125,7 +118,7 @@ nifi_instance *create_instance(const char *url, nifi_port *port) {
    * This API will gradually move away from C++, hence malloc is used for nifi_instance
    * Since minifi::Instance is currently being used, then we need to use new in that case.
    */
-  instance->instance_ptr = new minifi::Instance(url, port->port_id);
+  instance->instance_ptr = new minifi::Instance(url, port->port_id, repo_type);
 
   NULL_CHECK(nullptr, instance->instance_ptr);
 
@@ -136,23 +129,51 @@ nifi_instance *create_instance(const char *url, nifi_port *port) {
   return instance;
 }
 
-standalone_processor *create_processor(const char *name) {
+standalone_processor * create_processor(const char *name, nifi_instance * instance) {
   NULL_CHECK(nullptr, name);
   auto ptr = ExecutionPlan::createProcessor(name, name);
   if (!ptr) {
     return nullptr;
   }
-  if (standalone_instance == nullptr) {
+  if (instance == NULL) {
     nifi_port port;
     char portnum[] = "98765";
     port.port_id = portnum;
-    standalone_instance = create_instance("internal_standalone", &port);
+    instance = create_instance("internal_standalone", &port);
   }
-  auto flow = create_new_flow(standalone_instance);
+  auto flow = create_new_flow(instance);
   std::shared_ptr<ExecutionPlan> plan(flow);
   plan->addProcessor(ptr, name);
   ExecutionPlan::addProcessorWithPlan(ptr->getUUIDStr(), plan);
   return static_cast<standalone_processor*>(ptr.get());
+}
+
+void initialize_content_repo(processor_context * ctx, const char * uuid) {
+    if (ctx->isInitialized()) {
+        return;
+    }
+    char * cwd = get_current_working_directory();
+    if (cwd) {
+        const char * sep = get_separator(0);
+        const std::string repo_path = std::string(cwd) + sep + "contentrepository" + sep + uuid;
+        ctx->initializeContentRepository(repo_path);
+        free(cwd);
+    }
+}
+
+void clear_content_repo(const nifi_instance * instance) {
+    const auto content_repo = static_cast<minifi::Instance*>(instance->instance_ptr)->getContentRepository();
+    const auto storage_path = content_repo->getStoragePath();
+    remove_directory(storage_path.c_str());
+}
+
+void get_proc_uuid_from_processor(standalone_processor * proc, char * uuid_target) {
+    strcpy(uuid_target, proc->getUUIDStr().c_str());
+}
+
+void get_proc_uuid_from_context(const processor_context * ctx, char * uuid_target) {
+    standalone_processor * proc = static_cast<standalone_processor*>(ctx->getProcessorNode()->getProcessor().get());
+    get_proc_uuid_from_processor(proc, uuid_target);
 }
 
 void free_standalone_processor(standalone_processor* proc) {
@@ -256,6 +277,62 @@ flow_file_record* create_ff_object_nc() {
   new_ff->attributes = new string_map();
   return new_ff;
 }
+
+flow_file_record * generate_flow(processor_context * ctx) {
+    flow_file_record * ffr = create_ff_object_nc();
+
+    if (ffr->crp) {
+    	delete static_cast<std::shared_ptr<minifi::core::ContentRepository>*>(ffr->crp);
+    }
+    ffr->crp = static_cast<void*>(new std::shared_ptr<minifi::core::ContentRepository>(ctx->getContentRepository()));
+
+    auto plan = ExecutionPlan::getPlan(ctx->getProcessorNode()->getProcessor()->getUUIDStr());
+
+    if (!plan) {
+        return nullptr;
+    }
+    ffr->ffp = NULL;
+    ffr->keepContent = 0;
+    auto ff_content_repo_ptr = (static_cast<std::shared_ptr<minifi::core::ContentRepository>*>(ffr->crp));
+    auto claim = std::make_shared<minifi::ResourceClaim>(*ff_content_repo_ptr);
+
+    size_t len = strlen(claim->getContentFullPath().c_str());
+    ffr->contentLocation = (char *) malloc((len + 1) * sizeof(char));
+    snprintf(ffr->contentLocation, len+1, "%s", claim->getContentFullPath().c_str());
+    return ffr;
+}
+
+flow_file_record * write_to_flow(const char * buff, size_t count, processor_context * ctx) {
+    if (!ctx) {
+        return NULL;
+    }
+
+    flow_file_record * ffr = generate_flow(ctx);
+
+    if (ffr == NULL) {
+        printf("Could not generate flow file\n");
+        return NULL;
+    }
+
+    FILE * ffp = fopen(ffr->contentLocation, "wb");
+    if (!ffp) {
+        printf("Cannot open flow file at path %s to write content to.\n", ffr->contentLocation);
+        free_flowfile(ffr);
+        return NULL;
+    }
+
+    int ret = fwrite(buff, 1, count, ffp);
+    if (ret < count) {
+        fclose(ffp);
+        free_flowfile(ffr);
+        return NULL;
+    }
+    fseek(ffp, 0, SEEK_END);
+    ffr->size = ftell(ffp);
+    fclose(ffp);
+    return ffr;
+}
+
 /**
  * Reclaims memory associated with a flow file object
  * @param ff flow file record.
@@ -480,9 +557,9 @@ flow * create_getfile(nifi_instance * instance, flow * parent_flow, GetFileConfi
   // automatically adds it with success
   auto getFile = new_flow->addProcessor(first_processor, first_processor);
 
-  new_flow->setProperty(getFile, processors::GetFile::Directory.getName(), c->directory);
-  new_flow->setProperty(getFile, processors::GetFile::KeepSourceFile.getName(), c->keep_source ? "true" : "false");
-  new_flow->setProperty(getFile, processors::GetFile::Recurse.getName(), c->recurse ? "true" : "false");
+  new_flow->setProperty(getFile, "Input Directory", c->directory);
+  new_flow->setProperty(getFile, "Keep Source File ", c->keep_source ? "true" : "false");
+  new_flow->setProperty(getFile, "Recurse Subdirectories", c->recurse ? "true" : "false");
 
   return new_flow;
 }
@@ -686,8 +763,8 @@ int transfer(processor_session* session, flow *flow, const char *rel) {
   return 0;
 }
 
-int add_custom_processor(const char * name, processor_logic* logic) {
-  return ExecutionPlan::addCustomProcessor(name, logic) ? 0 : -1;
+int var_add_custom_processor(custom_processor_args in) {
+  return ExecutionPlan::addCustomProcessor(in) ? 0 : -1;
 }
 
 int delete_custom_processor(const char * name) {

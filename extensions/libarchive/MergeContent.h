@@ -20,6 +20,7 @@
 #ifndef __MERGE_CONTENT_H__
 #define __MERGE_CONTENT_H__
 
+#include "ArchiveCommon.h"
 #include "BinFiles.h"
 #include "archive_entry.h"
 #include "archive.h"
@@ -47,8 +48,7 @@ namespace processors {
 class MergeBin {
 public:
 
-  virtual ~MergeBin(){
-  }
+  virtual ~MergeBin() = default;
 
   virtual std::string getMergedContentType() = 0;
   // merge the flows in the bin
@@ -71,11 +71,9 @@ public:
     ReadCallback(uint64_t size, std::shared_ptr<io::BaseStream> stream)
         : buffer_size_(size), stream_(stream) {
     }
-    ~ReadCallback() {
-    }
+    ~ReadCallback() = default;
     int64_t process(std::shared_ptr<io::BaseStream> stream) {
-      int max_read = getpagesize();
-      uint8_t buffer[max_read];
+      uint8_t buffer[4096U];
       int64_t ret = 0;
       uint64_t read_size = 0;
       while (read_size < buffer_size_) {
@@ -145,11 +143,9 @@ public:
     ReadCallback(uint64_t size, struct archive *arch, struct archive_entry *entry) :
         buffer_size_(size), arch_(arch), entry_(entry) {
     }
-    ~ReadCallback() {
-    }
+    ~ReadCallback() = default;
     int64_t process(std::shared_ptr<io::BaseStream> stream) {
-      int max_read = getpagesize();
-      uint8_t buffer[max_read];
+      uint8_t buffer[4096U];
       int64_t ret = 0;
       uint64_t read_size = 0;
       ret = archive_write_header(arch_, entry_);
@@ -178,8 +174,7 @@ public:
       size_ = 0;
       stream_ = nullptr;
     }
-    ~WriteCallback() {
-    }
+    ~WriteCallback() = default;
 
     std::string merge_type_;
     std::deque<std::shared_ptr<core::FlowFile>> &flows_;
@@ -280,15 +275,14 @@ class MergeContent : public processors::BinFiles {
     keepPath_ = false;
   }
   // Destructor
-  virtual ~MergeContent() {
-  }
+  virtual ~MergeContent() = default;
   // Processor Name
   static constexpr char const* ProcessorName = "MergeContent";
   // Supported Properties
   static core::Property MergeStrategy;
   static core::Property MergeFormat;
   static core::Property CorrelationAttributeName;
-  static core::Property DelimiterStratgey;
+  static core::Property DelimiterStrategy;
   static core::Property KeepPath;
   static core::Property Header;
   static core::Property Footer;

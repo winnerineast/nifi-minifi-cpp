@@ -15,9 +15,12 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#ifndef LIBMINIFI_INCLUDE_UPDATECONTROLLER_H_
-#define LIBMINIFI_INCLUDE_UPDATECONTROLLER_H_
+#ifndef LIBMINIFI_INCLUDE_CORE_STATE_UPDATECONTROLLER_H_
+#define LIBMINIFI_INCLUDE_CORE_STATE_UPDATECONTROLLER_H_
 
+#include <memory>
+#include <utility>
+#include <vector>
 #include <string>
 #include "utils/ThreadPool.h"
 #include "utils/BackTrace.h"
@@ -37,7 +40,6 @@ enum class UpdateState {
   SET_ERROR,
   READ_ERROR,
   NESTED  // multiple updates embedded into one
-
 };
 
 /**
@@ -46,7 +48,7 @@ enum class UpdateState {
  */
 class UpdateStatus {
  public:
-  UpdateStatus(UpdateState state, int16_t reason = 0);
+  UpdateStatus(UpdateState state, int16_t reason = 0); // NOLINT
 
   UpdateStatus(const UpdateStatus &other);
 
@@ -69,29 +71,21 @@ class UpdateStatus {
 
 class Update {
  public:
-
   Update()
       : status_(UpdateStatus(UpdateState::INITIATE, 0)) {
   }
 
-  Update(UpdateStatus status)
+  Update(UpdateStatus status) // NOLINT
       : status_(status) {
-
   }
 
-  Update(const Update &other)
-      : status_(other.status_) {
-
-  }
+  Update(const Update &other) = default;
 
   Update(const Update &&other)
       : status_(std::move(other.status_)) {
-
   }
 
-  virtual ~Update() {
-
-  }
+  virtual ~Update() = default;
 
   virtual bool validate() {
     return true;
@@ -106,10 +100,7 @@ class Update {
     return *this;
   }
 
-  Update &operator=(const Update &other) {
-    status_ = other.status_;
-    return *this;
-  }
+  Update &operator=(const Update &other) = default;
 
  protected:
   UpdateStatus status_;
@@ -132,12 +123,9 @@ class UpdateRunner : public utils::AfterExecute<Update> {
   explicit UpdateRunner(UpdateRunner && other)
       : running_(std::move(other.running_)),
         delay_(std::move(other.delay_)) {
-
   }
 
-  ~UpdateRunner() {
-
-  }
+  ~UpdateRunner() = default;
 
   virtual bool isFinished(const Update &result) {
     if ((result.getStatus().getState() == UpdateState::FULLY_APPLIED || result.getStatus().getState() == UpdateState::READ_COMPLETE) && *running_) {
@@ -150,25 +138,21 @@ class UpdateRunner : public utils::AfterExecute<Update> {
     return !*running_;
   }
 
-  virtual int64_t wait_time() {
+  virtual std::chrono::milliseconds wait_time() {
     return delay_;
   }
- protected:
 
+ protected:
   std::atomic<bool> *running_;
 
-  int64_t delay_;
-
+  std::chrono::milliseconds delay_;
 };
 
 class StateController {
  public:
+  virtual ~StateController() = default;
 
-  virtual ~StateController() {
-
-  }
-
-  virtual std::string getComponentName() const= 0;
+  virtual std::string getComponentName() const = 0;
 
   virtual std::string getComponentUUID() const = 0;
   /**
@@ -193,9 +177,7 @@ class StateController {
  */
 class StateMonitor : public StateController {
  public:
-  virtual ~StateMonitor() {
-
-  }
+  virtual ~StateMonitor() = default;
 
   std::atomic<bool> &isStateMonitorRunning() {
     return controller_running_;
@@ -255,19 +237,31 @@ class StateMonitor : public StateController {
  */
 class UpdateController {
  public:
-
-  virtual std::vector<std::function<Update()>> getFunctions() = 0;
-
-  virtual ~UpdateController() {
-
+  UpdateController()
+      : controller_running_(false) {
   }
 
+  virtual ~UpdateController() = default;
+
+  virtual std::vector<std::function<utils::TaskRescheduleInfo()>> getFunctions() {
+    return {};
+  }
+
+  virtual void start() = 0;
+
+  virtual void stop() = 0;
+
+  std::atomic<bool>& isControllerRunning() {
+    return controller_running_;
+  }
+ protected:
+  std::atomic<bool> controller_running_;
 };
 
-} /* namespace state */
-} /* namespace minifi */
-} /* namespace nifi */
-} /* namespace apache */
-} /* namespace org */
+}  // namespace state
+}  // namespace minifi
+}  // namespace nifi
+}  // namespace apache
+}  // namespace org
 
-#endif /* LIBMINIFI_INCLUDE_C2_UPDATECONTROLLER_H_ */
+#endif  // LIBMINIFI_INCLUDE_CORE_STATE_UPDATECONTROLLER_H_

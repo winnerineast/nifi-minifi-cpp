@@ -17,6 +17,10 @@
 #ifndef LIBMINIFI_INCLUDE_UTILS_BYTEARRAYCALLBACK_H_
 #define LIBMINIFI_INCLUDE_UTILS_BYTEARRAYCALLBACK_H_
 
+#include <memory>
+#include <string>
+#include <vector>
+
 #include "concurrentqueue.h"
 #include "FlowFileRecord.h"
 #include "core/logging/LoggerConfiguration.h"
@@ -36,12 +40,9 @@ class ByteInputCallBack : public InputStreamCallback {
       : ptr(nullptr) {
   }
 
-  virtual ~ByteInputCallBack() {
-
-  }
+  virtual ~ByteInputCallBack() = default;
 
   virtual int64_t process(std::shared_ptr<io::BaseStream> stream) {
-
     stream->seek(0);
 
     if (stream->getSize() > 0) {
@@ -50,14 +51,12 @@ class ByteInputCallBack : public InputStreamCallback {
       stream->readData(reinterpret_cast<uint8_t*>(vec.data()), stream->getSize());
     }
 
-    ptr = (char*) &vec[0];
+    ptr = reinterpret_cast<char*>(&vec[0]);
 
     return vec.size();
-
   }
 
   virtual void seek(size_t pos) {
-
   }
 
   virtual void write(std::string content) {
@@ -104,7 +103,7 @@ class ByteOutputCallback : public OutputStreamCallback {
   }
 
   virtual ~ByteOutputCallback() {
-	  close();
+    close();
   }
 
   virtual int64_t process(std::shared_ptr<io::BaseStream> stream);
@@ -122,7 +121,6 @@ class ByteOutputCallback : public OutputStreamCallback {
   size_t readFully(char *buffer, size_t size);
 
  protected:
-
   inline void write_and_notify(char *data, size_t size);
 
   inline size_t read_current_str(char *buffer, size_t size);
@@ -146,14 +144,12 @@ class ByteOutputCallback : public OutputStreamCallback {
   moodycamel::ConcurrentQueue<std::string> queue_;
 
   std::shared_ptr<logging::Logger> logger_;
-
 };
 
 class StreamOutputCallback : public ByteOutputCallback {
  public:
   explicit StreamOutputCallback(size_t max_size, bool wait_on_read = false)
       : ByteOutputCallback(max_size, wait_on_read) {
-
   }
 
   virtual void write(char *data, size_t size);
@@ -161,10 +157,10 @@ class StreamOutputCallback : public ByteOutputCallback {
   virtual int64_t process(std::shared_ptr<io::BaseStream> stream);
 };
 
-} /* namespace utils */
-} /* namespace minifi */
-} /* namespace nifi */
-} /* namespace apache */
-} /* namespace org */
+}  // namespace utils
+}  // namespace minifi
+}  // namespace nifi
+}  // namespace apache
+}  // namespace org
 
-#endif /* LIBMINIFI_INCLUDE_UTILS_BYTEARRAYCALLBACK_H_ */
+#endif  // LIBMINIFI_INCLUDE_UTILS_BYTEARRAYCALLBACK_H_

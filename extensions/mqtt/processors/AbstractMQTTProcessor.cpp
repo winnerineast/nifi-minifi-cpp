@@ -21,6 +21,8 @@
 #include <stdio.h>
 #include <memory>
 #include <string>
+#include <cinttypes>
+
 #include "utils/TimeUtil.h"
 #include "utils/StringUtils.h"
 #include "core/ProcessContext.h"
@@ -46,32 +48,15 @@ core::Property AbstractMQTTProcessor::SecurityCA("Security CA", "File or directo
 core::Property AbstractMQTTProcessor::SecurityCert("Security Cert", "Path to client's public key (PEM) used for authentication", "");
 core::Property AbstractMQTTProcessor::SecurityPrivateKey("Security Private Key", "Path to client's private key (PEM) used for authentication", "");
 core::Property AbstractMQTTProcessor::SecurityPrivateKeyPassWord("Security Pass Phrase", "Private key passphrase", "");
-core::Relationship AbstractMQTTProcessor::Success("success", "FlowFiles that are sent successfully to the destination are transferred to this relationship");
-core::Relationship AbstractMQTTProcessor::Failure("failure", "FlowFiles that failed to send to the destination are transferred to this relationship");
 
-void AbstractMQTTProcessor::initialize() {
-  // Set the supported properties
-  std::set<core::Property> properties;
-  properties.insert(BrokerURL);
-  properties.insert(CleanSession);
-  properties.insert(ClientID);
-  properties.insert(UserName);
-  properties.insert(PassWord);
-  properties.insert(KeepLiveInterval);
-  properties.insert(ConnectionTimeOut);
-  properties.insert(QOS);
-  properties.insert(Topic);
-  setSupportedProperties(properties);
-  // Set the supported relationships
-  std::set<core::Relationship> relationships;
-  relationships.insert(Success);
-  relationships.insert(Failure);
-  setSupportedRelationships(relationships);
-  MQTTClient_SSLOptions sslopts_ = MQTTClient_SSLOptions_initializer;
-  sslEnabled_ = false;
+const std::set<core::Property> AbstractMQTTProcessor::getSupportedProperties() {
+  return {BrokerURL, CleanSession, ClientID, UserName, PassWord, KeepLiveInterval, ConnectionTimeOut, QOS, Topic};
 }
 
-void AbstractMQTTProcessor::onSchedule(core::ProcessContext *context, core::ProcessSessionFactory *sessionFactory) {
+void AbstractMQTTProcessor::onSchedule(const std::shared_ptr<core::ProcessContext> &context, const std::shared_ptr<core::ProcessSessionFactory> &factory) {
+  sslEnabled_ = false;
+  sslopts_ = MQTTClient_SSLOptions_initializer;
+
   std::string value;
   int64_t valInt;
   value = "";
@@ -109,7 +94,7 @@ void AbstractMQTTProcessor::onSchedule(core::ProcessContext *context, core::Proc
     core::TimeUnit unit;
     if (core::Property::StringToTime(value, valInt, unit) && core::Property::ConvertTimeUnitToMS(valInt, unit, valInt)) {
       keepAliveInterval_ = valInt/1000;
-      logger_->log_debug("AbstractMQTTProcessor: KeepLiveInterval [%ll]", keepAliveInterval_);
+      logger_->log_debug("AbstractMQTTProcessor: KeepLiveInterval [%" PRId64 "]", keepAliveInterval_);
     }
   }
   value = "";
@@ -117,21 +102,20 @@ void AbstractMQTTProcessor::onSchedule(core::ProcessContext *context, core::Proc
     core::TimeUnit unit;
     if (core::Property::StringToTime(value, valInt, unit) && core::Property::ConvertTimeUnitToMS(valInt, unit, valInt)) {
       connectionTimeOut_ = valInt/1000;
-      logger_->log_debug("AbstractMQTTProcessor: ConnectionTimeOut [%ll]", connectionTimeOut_);
+      logger_->log_debug("AbstractMQTTProcessor: ConnectionTimeOut [%" PRId64 "]", connectionTimeOut_);
     }
   }
   value = "";
   if (context->getProperty(QOS.getName(), value) && !value.empty() && (value == MQTT_QOS_0 || value == MQTT_QOS_1 || MQTT_QOS_2) &&
       core::Property::StringToInt(value, valInt)) {
     qos_ = valInt;
-    logger_->log_debug("AbstractMQTTProcessor: QOS [%ll]", qos_);
+    logger_->log_debug("AbstractMQTTProcessor: QOS [%" PRId64 "]", qos_);
   }
   value = "";
 
   if (context->getProperty(SecurityProtocol.getName(), value) && !value.empty()) {
     if (value == MQTT_SECURITY_PROTOCOL_SSL) {
       sslEnabled_ = true;
-      logger_->log_debug("AbstractMQTTProcessor: ssl enable");
       value = "";
       if (context->getProperty(SecurityCA.getName(), value) && !value.empty()) {
         logger_->log_debug("AbstractMQTTProcessor: trustStore [%s]", value);
@@ -180,14 +164,21 @@ bool AbstractMQTTProcessor::reconnect() {
     conn_opts.username = userName_.c_str();
     conn_opts.password = passWord_.c_str();
   }
-  if (sslEnabled_)
+  if (sslEnabled_) {
     conn_opts.ssl = &sslopts_;
-  if (MQTTClient_connect(client_, &conn_opts) != MQTTCLIENT_SUCCESS) {
-    logger_->log_error("Failed to connect to MQTT broker %s", uri_);
+  }
+  int ret = MQTTClient_connect(client_, &conn_opts);
+  if (ret != MQTTCLIENT_SUCCESS) {
+    logger_->log_error("Failed to connect to MQTT broker %s (%d)", uri_, ret);
     return false;
   }
   if (isSubscriber_) {
-    MQTTClient_subscribe(client_, topic_.c_str(), qos_);
+    ret = MQTTClient_subscribe(client_, topic_.c_str(), qos_);
+    if(ret != MQTTCLIENT_SUCCESS) {
+      logger_->log_error("Failed to subscribe to MQTT topic %s (%d)", topic_, ret);
+      return false;
+    }
+    logger_->log_debug("Successfully subscribed to MQTT topic: %s", topic_);
   }
   return true;
 }

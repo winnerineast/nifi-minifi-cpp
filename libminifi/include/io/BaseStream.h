@@ -18,6 +18,9 @@
 
 #ifndef LIBMINIFI_INCLUDE_IO_BASESTREAM_H_
 #define LIBMINIFI_INCLUDE_IO_BASESTREAM_H_
+
+#include <string>
+#include <vector>
 #include <iostream>
 #include <cstdint>
 #include "EndianCheck.h"
@@ -40,19 +43,17 @@ namespace io {
  * Extensions may be thread safe and thus shareable, but that is up to the implementation.
  */
 class BaseStream : public DataStream, public Serializable {
-
  public:
   BaseStream()
       : composable_stream_(this) {
   }
 
-  BaseStream(DataStream *other)
+  BaseStream(DataStream *other) // NOLINT
       : composable_stream_(other) {
   }
 
-  virtual ~BaseStream() {
+  ~BaseStream() override = default;
 
-  }
   /**
    * write 4 bytes to stream
    * @param base_value non encoded value
@@ -62,9 +63,9 @@ class BaseStream : public DataStream, public Serializable {
    **/
   virtual int write(uint32_t base_value, bool is_little_endian = EndiannessCheck::IS_LITTLE);
 
-  virtual int writeData(uint8_t *value, int size);
+  int writeData(uint8_t *value, int size) override;
 
-  virtual void seek(uint64_t offset) {
+  void seek(uint64_t offset) override {
     if (LIKELY(composable_stream_ != this)) {
       composable_stream_->seek(offset);
     } else {
@@ -126,13 +127,13 @@ class BaseStream : public DataStream, public Serializable {
    * @param buf buffer in which we extract data
    * @param buflen
    */
-  virtual int readData(std::vector<uint8_t> &buf, int buflen);
+  int readData(std::vector<uint8_t> &buf, int buflen) override;
   /**
    * Reads data and places it into buf
    * @param buf buffer in which we extract data
    * @param buflen
    */
-  virtual int readData(uint8_t *buf, int buflen);
+  int readData(uint8_t *buf, int buflen) override;
 
   /**
    * reads two bytes from the stream
@@ -140,7 +141,7 @@ class BaseStream : public DataStream, public Serializable {
    * @param stream stream from which we will read
    * @return resulting read size
    **/
-  virtual int read(uint16_t &base_value, bool is_little_endian = EndiannessCheck::IS_LITTLE);
+  int read(uint16_t &base_value, bool is_little_endian = EndiannessCheck::IS_LITTLE) override;
 
   /**
    * reads a byte from the stream
@@ -165,7 +166,7 @@ class BaseStream : public DataStream, public Serializable {
    * @param stream stream from which we will read
    * @return resulting read size
    **/
-  virtual int read(uint32_t &value, bool is_little_endian = EndiannessCheck::IS_LITTLE);
+  int read(uint32_t &value, bool is_little_endian = EndiannessCheck::IS_LITTLE) override;
 
   /**
    * reads eight byte from the stream
@@ -173,15 +174,14 @@ class BaseStream : public DataStream, public Serializable {
    * @param stream stream from which we will read
    * @return resulting read size
    **/
-  virtual int read(uint64_t &value, bool is_little_endian = EndiannessCheck::IS_LITTLE);
+  int read(uint64_t &value, bool is_little_endian = EndiannessCheck::IS_LITTLE) override;
 
-  virtual const uint64_t getSize() const {
+  const uint64_t getSize() const override {
     if (LIKELY(composable_stream_ == this)) {
       return buffer.size();
     } else {
       return composable_stream_->getSize();
     }
-
   }
 
   /**
@@ -191,17 +191,17 @@ class BaseStream : public DataStream, public Serializable {
    * @return resulting read size
    **/
   virtual int readUTF(std::string &str, bool widen = false);
+
  protected:
   /**
    * Changed to private to facilitate easier management of composable_stream_ and make it immutable
    */
   DataStream *composable_stream_;
-}
-;
+};
 
-} /* namespace io */
-} /* namespace minifi */
-} /* namespace nifi */
-} /* namespace apache */
-} /* namespace org */
-#endif /* LIBMINIFI_INCLUDE_IO_BASESTREAM_H_ */
+}  // namespace io
+}  // namespace minifi
+}  // namespace nifi
+}  // namespace apache
+}  // namespace org
+#endif  // LIBMINIFI_INCLUDE_IO_BASESTREAM_H_

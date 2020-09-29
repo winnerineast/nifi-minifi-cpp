@@ -18,6 +18,9 @@
 #ifndef LIBMINIFI_INCLUDE_CORE_STATE_UPDATEPOLICY_H_
 #define LIBMINIFI_INCLUDE_CORE_STATE_UPDATEPOLICY_H_
 
+#include <memory>
+#include <string>
+#include <utility>
 #include <unordered_map>
 
 namespace org {
@@ -40,7 +43,6 @@ class UpdatePolicyBuilder;
  */
 class UpdatePolicy {
  public:
-
   explicit UpdatePolicy(bool enable_all)
       : enable_all_(enable_all) {
   }
@@ -60,22 +62,12 @@ class UpdatePolicy {
     return enable_all_;
   }
 
-  UpdatePolicy &operator=(const UpdatePolicy &&other) {
-    enable_all_ = std::move(other.enable_all_);
-    properties_ = std::move(other.properties_);
-    return *this;
-  }
+  UpdatePolicy &operator=(UpdatePolicy &&other) = default;
 
  protected:
+  UpdatePolicy(const UpdatePolicy &other) = default;
 
-  explicit UpdatePolicy(const UpdatePolicy &other)
-      : enable_all_(other.enable_all_), properties_(other.properties_) {
-  }
-
-  explicit UpdatePolicy(const UpdatePolicy &&other)
-      : enable_all_(std::move(other.enable_all_)),
-        properties_(std::move(other.properties_)) {
-  }
+  UpdatePolicy(UpdatePolicy &&other) = default;
 
   UpdatePolicy() = delete;
 
@@ -92,7 +84,6 @@ class UpdatePolicy {
   bool enable_all_;
 
   std::unordered_map<std::string, UPDATE_POLICY> properties_;
-
 };
 
 /**
@@ -122,11 +113,7 @@ class UpdatePolicyBuilder {
 
 
  protected:
-
-  explicit UpdatePolicyBuilder(const UpdatePolicyBuilder &other)
-      : current_policy_(other.current_policy_) {
-  }
-
+  UpdatePolicyBuilder(const UpdatePolicyBuilder &other) = default;
 
   explicit UpdatePolicyBuilder(bool enable_all) {
     current_policy_ = std::make_shared<UpdatePolicy>(enable_all);
@@ -135,10 +122,10 @@ class UpdatePolicyBuilder {
   std::shared_ptr<UpdatePolicy> current_policy_;
 };
 
-} /* namespace state */
-} /* namespace minifi */
-} /* namespace nifi */
-} /* namespace apache */
-} /* namespace org */
+}  // namespace state
+}  // namespace minifi
+}  // namespace nifi
+}  // namespace apache
+}  // namespace org
 
-#endif /* LIBMINIFI_INCLUDE_CORE_STATE_UPDATEPOLICY_H_ */
+#endif  // LIBMINIFI_INCLUDE_CORE_STATE_UPDATEPOLICY_H_

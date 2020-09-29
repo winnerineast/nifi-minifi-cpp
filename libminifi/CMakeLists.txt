@@ -33,9 +33,6 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 if (WIN32)
 	add_definitions(-DWIN32_LEAN_AND_MEAN)
-	include_directories("thirdparty/uuid/include/win32/")
-else()
-	include_directories("thirdparty/uuid/include/posix")
 endif()
 IF (IOS)
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fobjc-abi-version=2 -fobjc-arc -std=gnu++11 -stdlib=libc++ -isysroot ${CMAKE_OSX_SYSROOT} -DIOS")
@@ -77,11 +74,6 @@ else()
 	set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wno-reorder")
 endif()
 
-include_directories(../thirdparty/spdlog-20170710/include)
-include_directories(../thirdparty/yaml-cpp-yaml-cpp-20171024/include)
-include_directories(../thirdparty/cron)
-include_directories(../thirdparty/rapidjson-1.1.0/include)
-include_directories(../thirdparty/concurrentqueue/)
 include_directories(include)
 
 
@@ -93,101 +85,60 @@ include_directories(opsys/posix)
 set(SOCKET_SOURCES "src/io/posix/*.cpp")
 endif()
 
-find_package(OpenSSL)
-if (OPENSSL_FOUND)
+if (NOT OPENSSL_OFF)
 	set(TLS_SOURCES "src/io/tls/*.cpp")
-endif(OPENSSL_FOUND)
-file(GLOB SOURCES  "src/sitetosite/*.cpp"  "src/core/logging/*.cpp"  "src/core/state/*.cpp" "src/core/state/nodes/*.cpp" "src/c2/protocols/*.cpp" "src/c2/triggers/*.cpp" "src/c2/*.cpp" "src/io/*.cpp" ${SOCKET_SOURCES} ${TLS_SOURCES} "src/core/controller/*.cpp" "src/controllers/*.cpp" "src/core/*.cpp"  "src/core/repository/*.cpp" "src/core/yaml/*.cpp" "src/core/reporting/*.cpp"  "src/provenance/*.cpp" "src/utils/*.cpp" "src/*.cpp")
+endif()
+
+file(GLOB SOURCES  "src/utils/file/*.cpp" "src/sitetosite/*.cpp"  "src/core/logging/*.cpp"  "src/core/state/*.cpp" "src/core/state/nodes/*.cpp" "src/c2/protocols/*.cpp" "src/c2/triggers/*.cpp" "src/c2/*.cpp" "src/io/*.cpp" ${SOCKET_SOURCES} ${TLS_SOURCES} "src/core/controller/*.cpp" "src/controllers/*.cpp" "src/controllers/keyvalue/*.cpp" "src/core/*.cpp"  "src/core/repository/*.cpp" "src/core/yaml/*.cpp" "src/core/reporting/*.cpp"  "src/provenance/*.cpp" "src/utils/*.cpp" "src/*.cpp")
+
+if(WIN32)
+	include(FindMessageCompiler)
+	find_package(MessageCompiler REQUIRED)
+	add_custom_target(message-strings
+						COMMAND "${CMAKE_MC_COMPILER}" -U "${CMAKE_CURRENT_SOURCE_DIR}/src/core/logging/WindowsMessageTextFile.mc" -h "${CMAKE_CURRENT_BINARY_DIR}/include/core/logging" -r "${CMAKE_CURRENT_BINARY_DIR}/src/core/logging"
+						DEPENDS "src/core/logging/WindowsMessageTextFile.mc"
+						BYPRODUCTS "include/core/logging/WindowsMessageTextFile.h" "src/core/logging/WindowsMessageTextFile.rc")
+	file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/src/core/logging")
+	file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/include/core/logging")
+endif()
 
 file(GLOB PROCESSOR_SOURCES  "src/processors/*.cpp" )
 
 
-file(GLOB SPD_SOURCES "../thirdparty/spdlog-20170710/include/spdlog/*")
-
-# Workaround the limitations of having a
-# header only library
-add_library(spdlog STATIC ${SPD_SOURCES})
 add_library(core-minifi STATIC ${SOURCES})
-target_link_libraries(core-minifi ${CMAKE_DL_LIBS} ${UUID_LIBRARIES} yaml-cpp)
+if(WIN32)
+        add_dependencies(core-minifi message-strings)
+        target_include_directories(core-minifi PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/include")
+endif()
 
-#target_link_libraries(core-minifi  PRIVATE bsdiff )
+list(APPEND LIBMINIFI_LIBRARIES yaml-cpp ZLIB::ZLIB concurrentqueue RapidJSON spdlog cron Threads::Threads gsl-lite optional-lite)
+if(NOT WIN32)
+	list(APPEND LIBMINIFI_LIBRARIES OSSP::libuuid++)
+endif()
+if (NOT OPENSSL_OFF)
+	list(APPEND LIBMINIFI_LIBRARIES OpenSSL::SSL)
+endif()
+target_link_libraries(core-minifi ${CMAKE_DL_LIBS} ${LIBMINIFI_LIBRARIES})
 
-
-include_directories(${ZLIB_INCLUDE_DIRS})
-
-target_link_libraries(core-minifi minifi-expression-language-extensions)
-target_link_libraries (core-minifi ${ZLIB_LIBRARIES})
-set_target_properties(core-minifi PROPERTIES LINK_FLAGS "/WHOLEARCHIVE")
-
-
-
-# Include OpenSSL
-
-if (OPENSSL_FOUND)
-	include_directories(${OPENSSL_INCLUDE_DIR})
-	#target_link_libraries (core-minifi ${OPENSSL_LIBRARIES})
-	if (WIN32)
-		foreach(OPENSSL_LIB ${OPENSSL_LIBRARIES})
-			if (OPENSSL_LIB MATCHES "\\.lib$" OR OPENSSL_LIB MATCHES "\\.dll$" )
-			message( "Including ${OPENSSL_LIB}")
-			target_link_libraries (core-minifi ${OPENSSL_LIB})	
-			set_target_properties(core-minifi PROPERTIES LINK_FLAGS "${LINK_FLAGS} /WHOLEARCHIVE:${OPENSSL_LIB}")
-			endif()
-		endforeach()
-	else()
-		target_link_libraries (core-minifi ${OPENSSL_LIBRARIES})
-	endif()
-
-endif (OPENSSL_FOUND)
 
 add_library(minifi STATIC ${PROCESSOR_SOURCES})
-
-
 target_link_libraries(minifi core-minifi)
 if (WIN32)
-set_target_properties(minifi PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS TRUE)
-set_target_properties(minifi PROPERTIES LINK_FLAGS "${LINK_FLAGS} /WHOLEARCHIVE:core-minifi")
+	set_target_properties(minifi PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS TRUE)
+	set_target_properties(minifi PROPERTIES LINK_FLAGS "${LINK_FLAGS} /WHOLEARCHIVE:core-minifi")
 endif()
 
 
 SET (LIBMINIFI core-minifi PARENT_SCOPE)
 
 if (ENABLE_PYTHON AND NOT STATIC_BUILD)
-#### shared
+	add_library(core-minifi-shared SHARED ${SOURCES})
+	target_link_libraries(core-minifi-shared ${CMAKE_DL_LIBS} ${LIBMINIFI_LIBRARIES})
 
-add_library(core-minifi-shared SHARED ${SOURCES})
-if (APPLE)
-	target_link_libraries(core-minifi-shared ${CMAKE_DL_LIBS} yaml-cpp)
-else()
-	target_link_libraries(core-minifi-shared ${CMAKE_DL_LIBS} uuid-shared yaml-cpp)
-endif()
-
-include_directories(${ZLIB_INCLUDE_DIRS})
-
-target_link_libraries(core-minifi-shared minifi-expression-language-extensions)
-target_link_libraries (core-minifi-shared ${ZLIB_LIBRARIES})
-if (WIN32)
-set_target_properties(core-minifi-shared PROPERTIES LINK_FLAGS "/WHOLEARCHIVE")
-endif()
-
-
-# Include OpenSSL
-
-if (OPENSSL_FOUND)
-	include_directories(${OPENSSL_INCLUDE_DIR})
-	target_link_libraries (core-minifi-shared ${OPENSSL_LIBRARIES})
-endif (OPENSSL_FOUND)
-
-add_library(minifi-shared SHARED ${PROCESSOR_SOURCES})
-
-target_link_libraries(minifi-shared core-minifi-shared)
-if (WIN32)
-set_target_properties(minifi-shared PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS TRUE)
-set_target_properties(minifi-shared PROPERTIES LINK_FLAGS "${LINK_FLAGS} /WHOLEARCHIVE:core-minifi-shared")
-endif()
-
-
-set_property(TARGET core-minifi-shared PROPERTY POSITION_INDEPENDENT_CODE ON)
-set_property(TARGET minifi-shared PROPERTY POSITION_INDEPENDENT_CODE ON)
-#endif()
+	add_library(minifi-shared SHARED ${PROCESSOR_SOURCES})
+	target_link_libraries(minifi-shared core-minifi-shared)
+	if (WIN32)
+		set_target_properties(minifi-shared PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS TRUE)
+		set_target_properties(minifi-shared PROPERTIES LINK_FLAGS "${LINK_FLAGS} /WHOLEARCHIVE:core-minifi-shared")
+	endif()
 endif(ENABLE_PYTHON AND NOT STATIC_BUILD)

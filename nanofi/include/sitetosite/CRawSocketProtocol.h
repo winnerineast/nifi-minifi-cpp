@@ -21,7 +21,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
-#include <uuid/uuid.h>
 
 #include "api/nanofi.h"
 #include "CSiteToSite.h"
@@ -194,7 +193,7 @@ static void initRawClient(struct CRawSiteToSiteClient *client, struct SiteToSite
 
 static struct CRawSiteToSiteClient* createClient(const char * host, uint16_t port, const char * nifi_port) {
   struct SiteToSiteCPeer * peer = (struct SiteToSiteCPeer *)malloc(sizeof(struct SiteToSiteCPeer));
-  initPeer(peer, NULL, host, port, "");
+  initPeer(peer, host, port, "");
   struct CRawSiteToSiteClient* client = (struct CRawSiteToSiteClient*)malloc(sizeof(struct CRawSiteToSiteClient));
   initRawClient(client, peer);
   client->_owns_resource = True;

@@ -22,12 +22,18 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#ifdef _WIN32
+#define NOMINMAX
+#include <winsock2.h>
+#endif
+#ifndef DEPRECATED
 #ifdef _MSC_VER
-#define DEPRECATED __declspec(deprecated)
+#define DEPRECATED(v,ev) __declspec(deprecated)
 #elif defined(__GNUC__) | defined(__clang__)
-#define DEPRECATED __attribute__((__deprecated__))
+#define DEPRECATED(v,ev) __attribute__((__deprecated__))
 #else
-#define DEPRECATED
+#define DEPRECATED(v,ev)
+#endif
 #endif
 
 /**
@@ -111,9 +117,9 @@ typedef struct {
 
   char * contentLocation; /**< Filesystem location of this object */
 
-  void *attributes; /**< Hash map of attributes */
+  void * attributes; /**< Hash map of attributes */
 
-  void *ffp;
+  void * ffp;
 
   uint8_t keepContent;
 
@@ -126,13 +132,63 @@ typedef enum FS {
   ROLLBACK
 } FailureStrategy;
 
-typedef void (processor_logic)(processor_session*, processor_context *);
+typedef void (ontrigger_callback)(processor_session*, processor_context *);
+typedef void (onschedule_callback)(processor_context *);
+
+typedef ontrigger_callback processor_logic;
 
 typedef struct file_buffer {
   uint8_t * buffer;
   uint64_t file_len;
 } file_buffer;
 
-typedef struct cstream cstream;
+#if defined(_WIN32) && defined(_WIN64)
+#define PRI_SOCKET "llu"
+#elif defined(_WIN32)
+#define PRI_SOCKET "u"
+#else
+#define PRI_SOCKET "d"
+typedef int SOCKET;
+#endif
+
+typedef struct cstream {
+  SOCKET socket_;
+} cstream;
+
+/****
+ * ##################################################################
+ *  STRING OPERATIONS
+ * ##################################################################
+ */
+
+typedef struct token_node {
+    char * data;
+    struct token_node * next;
+} token_node;
+
+typedef struct token_list {
+    struct token_node * head;
+    struct token_node * tail;
+    uint64_t size;
+    uint64_t total_bytes;
+    int has_non_delimited_token;
+} token_list;
+
+/****
+ * ##################################################################
+ *  FLOWFILE OPERATIONS
+ * ##################################################################
+ */
+
+typedef struct flow_file_list {
+    flow_file_record * ff_record;
+    int complete;
+    struct flow_file_list * next;
+} flow_file_list;
+
+typedef struct flow_file_info {
+    struct flow_file_list * ff_list;
+    uint64_t total_bytes;
+} flow_file_info;
 
 #endif /* LIBMINIFI_SRC_CAPI_CSTRUCTS_H_ */

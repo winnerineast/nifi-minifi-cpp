@@ -18,25 +18,29 @@
  * limitations under the License.
  */
 #include "core/Processor.h"
+
 #include <time.h>
-#include <vector>
-#include <queue>
-#include <map>
-#include <set>
+
 #include <chrono>
+#include <functional>
+#include <map>
+#include <memory>
+#include <queue>
+#include <set>
 #include <string>
 #include <thread>
-#include <memory>
-#include <functional>
 #include <utility>
+#include <vector>
+
 #include "Connection.h"
-#include "core/ProcessorConfig.h"
 #include "core/Connectable.h"
+#include "core/logging/LoggerConfiguration.h"
+#include "core/ProcessorConfig.h"
 #include "core/ProcessContext.h"
 #include "core/ProcessSession.h"
 #include "core/ProcessSessionFactory.h"
 #include "io/StreamFactory.h"
-#include "core/logging/LoggerConfiguration.h"
+#include "utils/gsl.h"
 
 namespace org {
 namespace apache {
@@ -98,14 +102,27 @@ void Processor::setScheduledState(ScheduledState state) {
 }
 
 bool Processor::addConnection(std::shared_ptr<Connectable> conn) {
-  bool ret = false;
+  enum class SetAs{
+    NONE,
+    OUTPUT,
+    INPUT,
+  };
+  SetAs result = SetAs::NONE;
 
   if (isRunning()) {
     logger_->log_warn("Can not add connection while the process %s is running", name_);
     return false;
   }
   std::shared_ptr<Connection> connection = std::static_pointer_cast<Connection>(conn);
-  std::lock_guard<std::mutex> lock(mutex_);
+  std::lock_guard<std::mutex> lock(getGraphMutex());
+
+  auto updateGraph = gsl::finally([&] {
+    if (result == SetAs::INPUT) {
+      updateReachability(lock);
+    } else if (result == SetAs::OUTPUT) {
+      updateReachability(lock, true);
+    }
+  });
 
   utils::Identifier srcUUID;
   utils::Identifier destUUID;
@@ -121,7 +138,7 @@ bool Processor::addConnection(std::shared_ptr<Connectable> conn) {
       connection->setDestination(shared_from_this());
       logger_->log_debug("Add connection %s into Processor %s incoming connection", connection->getName(), name_);
       incoming_connections_Iter = this->_incomingConnections.begin();
-      ret = true;
+      result = SetAs::OUTPUT;
     }
   }
   std::string source_uuid = srcUUID.to_string();
@@ -140,7 +157,7 @@ bool Processor::addConnection(std::shared_ptr<Connectable> conn) {
           connection->setSource(shared_from_this());
           out_going_connections_[relationship] = existedConnection;
           logger_->log_debug("Add connection %s into Processor %s outgoing connection for relationship %s", connection->getName(), name_, relationship);
-          ret = true;
+          result = SetAs::INPUT;
         }
       } else {
         // We do not have any outgoing connection for this relationship yet
@@ -149,11 +166,11 @@ bool Processor::addConnection(std::shared_ptr<Connectable> conn) {
         connection->setSource(shared_from_this());
         out_going_connections_[relationship] = newConnection;
         logger_->log_debug("Add connection %s into Processor %s outgoing connection for relationship %s", connection->getName(), name_, relationship);
-        ret = true;
+        result = SetAs::INPUT;
       }
     }
   }
-  return ret;
+  return result != SetAs::NONE;
 }
 
 void Processor::removeConnection(std::shared_ptr<Connectable> conn) {
@@ -162,7 +179,7 @@ void Processor::removeConnection(std::shared_ptr<Connectable> conn) {
     return;
   }
 
-  std::lock_guard<std::mutex> lock(mutex_);
+  std::lock_guard<std::mutex> lock(getGraphMutex());
 
   utils::Identifier srcUUID;
   utils::Identifier destUUID;
@@ -217,14 +234,13 @@ bool Processor::flowFilesQueued() {
 bool Processor::flowFilesOutGoingFull() {
   std::lock_guard<std::mutex> lock(mutex_);
 
-  for (auto &&connection : out_going_connections_) {
+  for (const auto& connection_pair : out_going_connections_) {
     // We already has connection for this relationship
-    std::set<std::shared_ptr<Connectable>> existedConnection = connection.second;
-    for (const auto conn : existedConnection) {
-      std::shared_ptr<Connection> connection = std::static_pointer_cast<Connection>(conn);
-      if (connection->isFull())
-        return true;
-    }
+    std::set<std::shared_ptr<Connectable>> existedConnection = connection_pair.second;
+    const bool has_full_connection = std::any_of(begin(existedConnection), end(existedConnection), [](const std::shared_ptr<Connectable>& conn) {
+      return std::static_pointer_cast<Connection>(conn)->isFull();
+    });
+    if (has_full_connection) { return true; }
   }
 
   return false;
@@ -238,11 +254,11 @@ void Processor::onTrigger(ProcessContext *context, ProcessSessionFactory *sessio
     onTrigger(context, session.get());
     session->commit();
   } catch (std::exception &exception) {
-    logger_->log_debug("Caught Exception %s", exception.what());
+    logger_->log_warn("Caught Exception %s during Processor::onTrigger of processor: %s (%s)", exception.what(), getUUIDStr(), getName());
     session->rollback();
     throw;
   } catch (...) {
-    logger_->log_debug("Caught Exception Processor::onTrigger");
+    logger_->log_warn("Caught Exception during Processor::onTrigger of processor: %s (%s)", getUUIDStr(), getName());
     session->rollback();
     throw;
   }
@@ -256,11 +272,11 @@ void Processor::onTrigger(const std::shared_ptr<ProcessContext> &context, const 
     onTrigger(context, session);
     session->commit();
   } catch (std::exception &exception) {
-    logger_->log_debug("Caught Exception %s", exception.what());
+    logger_->log_warn("Caught Exception %s during Processor::onTrigger of processor: %s (%s)", exception.what(), getUUIDStr(), getName());
     session->rollback();
     throw;
   } catch (...) {
-    logger_->log_debug("Caught Exception Processor::onTrigger");
+    logger_->log_warn("Caught Exception during Processor::onTrigger of processor: %s (%s)", getUUIDStr(), getName());
     session->rollback();
     throw;
   }
@@ -268,6 +284,7 @@ void Processor::onTrigger(const std::shared_ptr<ProcessContext> &context, const 
 
 bool Processor::isWorkAvailable() {
   // We have work if any incoming connection has work
+  std::lock_guard<std::mutex> lock(mutex_);
   bool hasWork = false;
 
   try {
@@ -286,8 +303,111 @@ bool Processor::isWorkAvailable() {
   return hasWork;
 }
 
-} /* namespace core */
-} /* namespace minifi */
-} /* namespace nifi */
-} /* namespace apache */
-} /* namespace org */
+// must hold the graphMutex
+void Processor::updateReachability(const std::lock_guard<std::mutex>& graph_lock, bool force) {
+  bool didChange = force;
+  for (auto& outIt : out_going_connections_) {
+    for (auto& outConn : outIt.second) {
+      auto connection = std::dynamic_pointer_cast<Connection>(outConn);
+      if (!connection) {
+        continue;
+      }
+      auto dest = std::dynamic_pointer_cast<const Processor>(connection->getDestination());
+      if (!dest) {
+        continue;
+      }
+      if (reachable_processors_[connection].insert(dest).second) {
+        didChange = true;
+      }
+      for (auto& reachedIt : dest->reachable_processors_) {
+        for (auto &reached_proc : reachedIt.second) {
+          if (reachable_processors_[connection].insert(reached_proc).second) {
+            didChange = true;
+          }
+        }
+      }
+    }
+  }
+  if (didChange) {
+    // propagate the change to sources
+    for (auto& inConn : _incomingConnections) {
+      auto connection = std::dynamic_pointer_cast<Connection>(inConn);
+      if (!connection) {
+        continue;
+      }
+      auto source = std::dynamic_pointer_cast<Processor>(connection->getSource());
+      if (!source) {
+        continue;
+      }
+      source->updateReachability(graph_lock);
+    }
+  }
+}
+
+bool Processor::partOfCycle(const std::shared_ptr<Connection>& conn) {
+  auto source = std::dynamic_pointer_cast<Processor>(conn->getSource());
+  if (!source) {
+    return false;
+  }
+  auto it = source->reachable_processors_.find(conn);
+  if (it == source->reachable_processors_.end()) {
+    return false;
+  }
+  return it->second.find(source) != it->second.end();
+}
+
+bool Processor::isThrottledByBackpressure() const {
+  bool isThrottledByOutgoing = ([&] {
+    for (auto &outIt : out_going_connections_) {
+      for (auto &out : outIt.second) {
+        auto connection = std::dynamic_pointer_cast<Connection>(out);
+        if (!connection) {
+          continue;
+        }
+        if (connection->isFull()) {
+          return true;
+        }
+      }
+    }
+    return false;
+  })();
+  bool isForcedByIncomingCycle = ([&] {
+    for (auto &inConn : _incomingConnections) {
+      auto connection = std::dynamic_pointer_cast<Connection>(inConn);
+      if (!connection) {
+        continue;
+      }
+      if (partOfCycle(connection) && connection->isFull()) {
+        return true;
+      }
+    }
+    return false;
+  })();
+  return isThrottledByOutgoing && !isForcedByIncomingCycle;
+}
+
+std::shared_ptr<Connectable> Processor::pickIncomingConnection() {
+  std::lock_guard<std::mutex> rel_guard(relationship_mutex_);
+
+  auto beginIt = incoming_connections_Iter;
+  std::shared_ptr<Connectable> inConn;
+  do {
+    inConn = getNextIncomingConnectionImpl(rel_guard);
+    auto connection = std::dynamic_pointer_cast<Connection>(inConn);
+    if (!connection) {
+      continue;
+    }
+    if (partOfCycle(connection) && connection->isFull()) {
+      return inConn;
+    }
+  } while (incoming_connections_Iter != beginIt);
+
+  // we did not find a preferred connection
+  return getNextIncomingConnectionImpl(rel_guard);
+}
+
+}  // namespace core
+}  // namespace minifi
+}  // namespace nifi
+}  // namespace apache
+}  // namespace org

@@ -18,6 +18,7 @@
  * limitations under the License.
  */
 #include "ThreadedSchedulingAgent.h"
+
 #include <memory>
 #include <string>
 #include <vector>
@@ -25,11 +26,16 @@
 #include <map>
 #include <thread>
 #include <iostream>
+#include <cinttypes>
+
+#include "core/ClassLoader.h"
 #include "core/Connectable.h"
 #include "core/ProcessorNode.h"
 #include "core/ProcessContext.h"
+#include "core/ProcessContextBuilder.h"
 #include "core/ProcessSession.h"
 #include "core/ProcessSessionFactory.h"
+#include "utils/GeneralUtils.h"
 
 namespace org {
 namespace apache {
@@ -39,13 +45,13 @@ namespace minifi {
 void ThreadedSchedulingAgent::schedule(std::shared_ptr<core::Processor> processor) {
   std::lock_guard<std::mutex> lock(mutex_);
 
-  admin_yield_duration_ = 0;
+  admin_yield_duration_ = 100;  // We should prevent burning CPU in case of rollbacks
   std::string yieldValue;
 
   if (configure_->get(Configure::nifi_administrative_yield_duration, yieldValue)) {
     core::TimeUnit unit;
     if (core::Property::StringToTime(yieldValue, admin_yield_duration_, unit) && core::Property::ConvertTimeUnitToMS(admin_yield_duration_, unit, admin_yield_duration_)) {
-      logger_->log_debug("nifi_administrative_yield_duration: [%ll] ms", admin_yield_duration_);
+      logger_->log_debug("nifi_administrative_yield_duration: [%" PRId64 "] ms", admin_yield_duration_);
     }
   }
 
@@ -53,7 +59,7 @@ void ThreadedSchedulingAgent::schedule(std::shared_ptr<core::Processor> processo
   if (configure_->get(Configure::nifi_bored_yield_duration, yieldValue)) {
     core::TimeUnit unit;
     if (core::Property::StringToTime(yieldValue, bored_yield_duration_, unit) && core::Property::ConvertTimeUnitToMS(bored_yield_duration_, unit, bored_yield_duration_)) {
-      logger_->log_debug("nifi_bored_yield_duration: [%ll] ms", bored_yield_duration_);
+      logger_->log_debug("nifi_bored_yield_duration: [%" PRId64 "] ms", bored_yield_duration_);
     }
   }
 
@@ -62,14 +68,20 @@ void ThreadedSchedulingAgent::schedule(std::shared_ptr<core::Processor> processo
     return;
   }
 
-  if (thread_pool_.isRunning(processor->getUUIDStr())) {
-    logger_->log_warn("Can not schedule threads for processor %s because there are existing threads running");
+  if (thread_pool_.isTaskRunning(processor->getUUIDStr())) {
+    logger_->log_warn("Can not schedule threads for processor %s because there are existing threads running", processor->getName());
     return;
   }
 
   std::shared_ptr<core::ProcessorNode> processor_node = std::make_shared<core::ProcessorNode>(processor);
 
-  auto processContext = std::make_shared<core::ProcessContext>(processor_node, controller_service_provider_, repo_, flow_repo_, configure_, content_repo_);
+  auto contextBuilder = core::ClassLoader::getDefaultClassLoader().instantiate<core::ProcessContextBuilder>("ProcessContextBuilder");
+
+  contextBuilder = contextBuilder->withContentRepository(content_repo_)->withFlowFileRepository(flow_repo_)->withProvider(controller_service_provider_)->withProvenanceRepository(repo_)
+      ->withConfiguration(configure_);
+
+  auto processContext = contextBuilder->build(processor_node);
+
   auto sessionFactory = std::make_shared<core::ProcessSessionFactory>(processContext);
 
   processor->onSchedule(processContext, sessionFactory);
@@ -81,25 +93,30 @@ void ThreadedSchedulingAgent::schedule(std::shared_ptr<core::Processor> processo
     // reference the disable function from serviceNode
     processor->incrementActiveTasks();
 
-    std::function<uint64_t()> f_ex = [agent, processor, processContext, sessionFactory] () {
+    std::function<utils::TaskRescheduleInfo()> f_ex = [agent, processor, processContext, sessionFactory] () {
       return agent->run(processor, processContext, sessionFactory);
     };
 
     // create a functor that will be submitted to the thread pool.
-    std::unique_ptr<TimerAwareMonitor> monitor = std::unique_ptr<TimerAwareMonitor>(new TimerAwareMonitor(&running_));
-    utils::Worker<uint64_t> functor(f_ex, processor->getUUIDStr(), std::move(monitor));
+    auto monitor = utils::make_unique<utils::ComplexMonitor>();
+    utils::Worker<utils::TaskRescheduleInfo> functor(f_ex, processor->getUUIDStr(), std::move(monitor));
     // move the functor into the thread pool. While a future is returned
     // we aren't terribly concerned with the result.
-    std::future<uint64_t> future;
+    std::future<utils::TaskRescheduleInfo> future;
     thread_pool_.execute(std::move(functor), future);
   }
   logger_->log_debug("Scheduled thread %d concurrent workers for for process %s", processor->getMaxConcurrentTasks(), processor->getName());
+  processors_running_.insert(processor->getUUIDStr());
   return;
 }
 
 void ThreadedSchedulingAgent::stop() {
   SchedulingAgent::stop();
-  thread_pool_.shutdown();
+  std::lock_guard<std::mutex> lock(mutex_);
+  for (const auto& p : processors_running_) {
+    logger_->log_error("SchedulingAgent is stopped before processor was unscheduled: %s", p);
+    thread_pool_.stopTasks(p);
+  }
 }
 
 void ThreadedSchedulingAgent::unschedule(std::shared_ptr<core::Processor> processor) {
@@ -116,6 +133,8 @@ void ThreadedSchedulingAgent::unschedule(std::shared_ptr<core::Processor> proces
   processor->clearActiveTask();
 
   processor->setScheduledState(core::STOPPED);
+
+  processors_running_.erase(processor->getUUIDStr());
 }
 
 } /* namespace minifi */

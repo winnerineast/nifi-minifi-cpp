@@ -15,15 +15,18 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#ifndef __LOGGER_H__
-#define __LOGGER_H__
+#ifndef LIBMINIFI_INCLUDE_CORE_LOGGING_LOGGER_H_
+#define LIBMINIFI_INCLUDE_CORE_LOGGING_LOGGER_H_
 
+#include <string>
 #include <mutex>
 #include <memory>
 #include <sstream>
+#include <utility>
 #include <iostream>
 
-#include "spdlog/spdlog.h"
+#include "spdlog/common.h"
+#include "spdlog/logger.h"
 
 namespace org {
 namespace apache {
@@ -36,32 +39,15 @@ namespace logging {
 
 class LoggerControl {
  public:
-  LoggerControl()
-      : is_enabled_(true) {
+  LoggerControl();
 
-  }
+  bool is_enabled() const;
 
-  bool is_enabled(){
-    return is_enabled_;
-  }
+  void setEnabled(bool status);
 
-  void setEnabled(bool status){
-    is_enabled_ = status;
-  }
  protected:
   std::atomic<bool> is_enabled_;
 };
-
-template<typename ... Args>
-inline std::string format_string(char const* format_str, Args&&... args) {
-  char buf[LOG_BUFFER_SIZE];
-  std::snprintf(buf, LOG_BUFFER_SIZE, format_str, args...);
-  return std::string(buf);
-}
-
-inline std::string format_string(char const* format_str) {
-  return format_str;
-}
 
 inline char const* conditional_conversion(std::string const& str) {
   return str.c_str();
@@ -70,6 +56,17 @@ inline char const* conditional_conversion(std::string const& str) {
 template<typename T>
 inline T conditional_conversion(T const& t) {
   return t;
+}
+
+template<typename ... Args>
+inline std::string format_string(char const* format_str, Args&&... args) {
+  char buf[LOG_BUFFER_SIZE];
+  std::snprintf(buf, LOG_BUFFER_SIZE, format_str, conditional_conversion(std::forward<Args>(args))...);
+  return std::string(buf);
+}
+
+inline std::string format_string(char const* format_str) {
+  return format_str;
 }
 
 typedef enum {
@@ -84,16 +81,11 @@ typedef enum {
 
 class BaseLogger {
  public:
+  virtual ~BaseLogger();
 
-  virtual ~BaseLogger() {
-
-  }
   virtual void log_string(LOG_LEVEL level, std::string str) = 0;
 
-  virtual bool should_log(const LOG_LEVEL &level) {
-    return true;
-  }
-
+  virtual bool should_log(const LOG_LEVEL &level);
 };
 
 /**
@@ -102,27 +94,13 @@ class BaseLogger {
  */
 class LogBuilder {
  public:
-  LogBuilder(BaseLogger *l, LOG_LEVEL level)
-      : ignore(false),
-        ptr(l),
-        level(level) {
-    if (!l->should_log(level)) {
-      setIgnore();
-    }
-  }
+  LogBuilder(BaseLogger *l, LOG_LEVEL level);
 
-  ~LogBuilder() {
-    if (!ignore)
-      log_string(level);
-  }
+  ~LogBuilder();
 
-  void setIgnore() {
-    ignore = true;
-  }
+  void setIgnore();
 
-  void log_string(LOG_LEVEL level) {
-    ptr->log_string(level, str.str());
-  }
+  void log_string(LOG_LEVEL level);
 
   template<typename T>
   LogBuilder &operator<<(const T &o) {
@@ -189,79 +167,21 @@ class Logger : public BaseLogger {
     log(spdlog::level::trace, format, args...);
   }
 
-  bool should_log(const LOG_LEVEL &level) {
-    if (controller_ && !controller_->is_enabled())
-      return false;
-    spdlog::level::level_enum logger_level = spdlog::level::level_enum::info;
-    switch (level) {
-      case critical:
-        logger_level = spdlog::level::level_enum::critical;
-        break;
-      case err:
-        logger_level = spdlog::level::level_enum::err;
-        break;
-      case info:
-        break;
-      case debug:
-        logger_level = spdlog::level::level_enum::debug;
-        break;
-      case off:
-        logger_level = spdlog::level::level_enum::off;
-        break;
-      case trace:
-        logger_level = spdlog::level::level_enum::trace;
-        break;
-      case warn:
-        logger_level = spdlog::level::level_enum::warn;
-        break;
-    }
-
-    std::lock_guard<std::mutex> lock(mutex_);
-    if (!delegate_->should_log(logger_level)) {
-      return false;
-    }
-    return true;
-  }
+  bool should_log(const LOG_LEVEL &level);
 
  protected:
+  virtual void log_string(LOG_LEVEL level, std::string str);
 
-  virtual void log_string(LOG_LEVEL level, std::string str) {
-    switch (level) {
-      case critical:
-        log_warn(str.c_str());
-        break;
-      case err:
-        log_error(str.c_str());
-        break;
-      case info:
-        log_info(str.c_str());
-        break;
-      case debug:
-        log_debug(str.c_str());
-        break;
-      case trace:
-        log_trace(str.c_str());
-        break;
-      case warn:
-        log_warn(str.c_str());
-        break;
-      case off:
-        break;
-    }
-  }
-  Logger(std::shared_ptr<spdlog::logger> delegate, std::shared_ptr<LoggerControl> controller)
-      : delegate_(delegate), controller_(controller) {
-  }
+  Logger(std::shared_ptr<spdlog::logger> delegate, std::shared_ptr<LoggerControl> controller);
 
-  Logger(std::shared_ptr<spdlog::logger> delegate)
-        : delegate_(delegate), controller_(nullptr) {
-    }
+  Logger(std::shared_ptr<spdlog::logger> delegate); // NOLINT
 
 
   std::shared_ptr<spdlog::logger> delegate_;
   std::shared_ptr<LoggerControl> controller_;
 
   std::mutex mutex_;
+
  private:
   template<typename ... Args>
   inline void log(spdlog::level::level_enum level, const char * const format, const Args& ... args) {
@@ -271,28 +191,29 @@ class Logger : public BaseLogger {
     if (!delegate_->should_log(level)) {
       return;
     }
-    delegate_->log(level, format_string(format, conditional_conversion(args)...));
+    const auto str = format_string(format, conditional_conversion(args)...);
+    delegate_->log(level, str);
   }
 
   Logger(Logger const&);
   Logger& operator=(Logger const&);
 };
 
-#define LOG_DEBUG(x) LogBuilder(x.get(),logging::LOG_LEVEL::debug)
+#define LOG_DEBUG(x) LogBuilder(x.get(), logging::LOG_LEVEL::debug)
 
-#define LOG_INFO(x) LogBuilder(x.get(),logging::LOG_LEVEL::info)
+#define LOG_INFO(x) LogBuilder(x.get(), logging::LOG_LEVEL::info)
 
-#define LOG_TRACE(x) LogBuilder(x.get(),logging::LOG_LEVEL::trace)
+#define LOG_TRACE(x) LogBuilder(x.get(), logging::LOG_LEVEL::trace)
 
-#define LOG_ERROR(x) LogBuilder(x.get(),logging::LOG_LEVEL::err)
+#define LOG_ERROR(x) LogBuilder(x.get(), logging::LOG_LEVEL::err)
 
-#define LOG_WARN(x) LogBuilder(x.get(),logging::LOG_LEVEL::warn)
+#define LOG_WARN(x) LogBuilder(x.get(), logging::LOG_LEVEL::warn)
 
-} /* namespace logging */
-} /* namespace core */
-} /* namespace minifi */
-} /* namespace nifi */
-} /* namespace apache */
-} /* namespace org */
+}  // namespace logging
+}  // namespace core
+}  // namespace minifi
+}  // namespace nifi
+}  // namespace apache
+}  // namespace org
 
-#endif
+#endif  // LIBMINIFI_INCLUDE_CORE_LOGGING_LOGGER_H_

@@ -17,11 +17,10 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#ifndef __RELATIONSHIP_H__
-#define __RELATIONSHIP_H__
+#ifndef LIBMINIFI_INCLUDE_CORE_RELATIONSHIP_H_
+#define LIBMINIFI_INCLUDE_CORE_RELATIONSHIP_H_
 
 #include <string>
-#include <uuid/uuid.h>
 #include <vector>
 #include <queue>
 #include <map>
@@ -46,7 +45,6 @@ inline bool isRelationshipNameUndefined(std::string name) {
 
 // Relationship Class
 class Relationship {
-
  public:
   /*
    * Create a new relationship 
@@ -56,17 +54,13 @@ class Relationship {
         description_(description) {
   }
 
-  Relationship(const Relationship &other)
-      : name_(other.name_),
-        description_(other.description_) {
-  }
+  Relationship(const Relationship &other) = default;
 
   Relationship()
       : name_(UNDEFINED_RELATIONSHIP) {
   }
   // Destructor
-  ~Relationship() {
-  }
+  ~Relationship() = default;
   // Get Name for the relationship
   std::string getName() const {
     return name_;
@@ -80,18 +74,22 @@ class Relationship {
     return name_ < right.name_;
   }
 
-  Relationship &operator=(const Relationship &other) {
-    name_ = other.name_;
-    description_ = other.description_;
-    return *this;
+  Relationship &operator=(const Relationship &other) = default;
+
+  bool operator==(const Relationship &other) const {
+    return name_ == other.name_;
   }
+
+  bool operator!=(const Relationship &other) const {
+    return !(*this == other);
+  }
+
   // Whether it is a undefined relationship
   bool isRelationshipUndefined() {
     return isRelationshipNameUndefined(name_);
   }
 
  protected:
-
   // Name
   std::string name_;
   // Description
@@ -100,9 +98,9 @@ class Relationship {
  private:
 };
 
-} /* namespace core */
-} /* namespace minifi */
-} /* namespace nifi */
-} /* namespace apache */
-} /* namespace org */
-#endif
+}  // namespace core
+}  // namespace minifi
+}  // namespace nifi
+}  // namespace apache
+}  // namespace org
+#endif  // LIBMINIFI_INCLUDE_CORE_RELATIONSHIP_H_

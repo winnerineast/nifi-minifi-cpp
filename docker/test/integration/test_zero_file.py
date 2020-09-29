@@ -16,8 +16,7 @@
 from minifi import *
 from minifi.test import *
 
-
-def test_minifi_to_nifi():
+def test_zero_file():
     """
     Verify sending data from a MiNiFi - C++ to NiFi using S2S protocol.
     """
@@ -32,7 +31,7 @@ def test_minifi_to_nifi():
                  >> LogAttribute()
                  >> port)
 
-    with DockerTestCluster(SegfaultValidator()) as cluster:
+    with DockerTestCluster(EmptyFilesOutPutValidator()) as cluster:
         cluster.deploy_flow(recv_flow, name='nifi', engine='nifi')
         cluster.deploy_flow(send_flow)
         assert cluster.check_output(60)

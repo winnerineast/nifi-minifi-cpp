@@ -17,9 +17,10 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#ifndef __CONFIGURE_H__
-#define __CONFIGURE_H__
+#ifndef LIBMINIFI_INCLUDE_PROPERTIES_CONFIGURE_H_
+#define LIBMINIFI_INCLUDE_PROPERTIES_CONFIGURE_H_
 
+#include <string>
 #include <mutex>
 #include "properties/Properties.h"
 
@@ -30,21 +31,35 @@ namespace minifi {
 
 class Configure : public Properties {
  public:
+  Configure() : Properties("MiNiFi configuration") {}
 
   void setAgentIdentifier(const std::string &identifier) {
     std::lock_guard<std::mutex> lock(mutex_);
     agent_identifier_ = identifier;
   }
-  std::string getAgentIdentifier() {
+  std::string getAgentIdentifier() const {
     std::lock_guard<std::mutex> lock(mutex_);
     return agent_identifier_;
   }
+
+  void setAgentClass(const std::string& agentClass) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    agent_class_ = agentClass;
+  }
+
+  std::string getAgentClass() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return agent_class_;
+  }
+
   // nifi.flow.configuration.file
   static const char *nifi_default_directory;
   static const char *nifi_flow_configuration_file;
   static const char *nifi_flow_configuration_file_exit_failure;
   static const char *nifi_flow_configuration_file_backup_update;
   static const char *nifi_flow_engine_threads;
+  static const char *nifi_flow_engine_alert_period;
+  static const char *nifi_flow_engine_event_driven_time_slice;
   static const char *nifi_administrative_yield_duration;
   static const char *nifi_bored_yield_duration;
   static const char *nifi_graceful_shutdown_seconds;
@@ -84,14 +99,21 @@ class Configure : public Properties {
   static const char *nifi_c2_flow_id;
   static const char *nifi_c2_flow_url;
   static const char *nifi_c2_flow_base_url;
+  static const char *nifi_c2_full_heartbeat;
+
+  // state management options
+  static const char *nifi_state_management_provider_local;
+  static const char *nifi_state_management_provider_local_always_persist;
+  static const char *nifi_state_management_provider_local_auto_persistence_interval;
 
  private:
   std::string agent_identifier_;
-  std::mutex mutex_;
+  std::string agent_class_;
+  mutable std::mutex mutex_;
 };
 
-} /* namespace minifi */
-} /* namespace nifi */
-} /* namespace apache */
-} /* namespace org */
-#endif
+}  // namespace minifi
+}  // namespace nifi
+}  // namespace apache
+}  // namespace org
+#endif  // LIBMINIFI_INCLUDE_PROPERTIES_CONFIGURE_H_

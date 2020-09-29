@@ -19,42 +19,13 @@
 
 include(${CMAKE_SOURCE_DIR}/extensions/ExtensionHeader.txt) 
 
-find_package(LibArchive)
-	
-include_directories(../../thirdparty/libarchive-3.3.2/libarchive)
-
 file(GLOB SOURCES  "*.cpp")
 
 add_library(minifi-archive-extensions STATIC ${SOURCES})
 set_property(TARGET minifi-archive-extensions PROPERTY POSITION_INDEPENDENT_CODE ON)
-if(THREADS_HAVE_PTHREAD_ARG)
-  target_compile_options(PUBLIC minifi-archive-extensions "-pthread")
-endif()
-if(CMAKE_THREAD_LIBS_INIT)
-  target_link_libraries(minifi-archive-extensions "${CMAKE_THREAD_LIBS_INIT}")
-endif()
 
-
-# Include UUID
-target_link_libraries(minifi-archive-extensions ${LIBMINIFI})
-target_link_libraries(minifi-archive-extensions archive_static )
-#find_package(ZLIB REQUIRED)
-#include_directories(${ZLIB_INCLUDE_DIRS})
-#target_link_libraries (minifi-archive-extensions ${ZLIB_LIBRARIES})
-if (WIN32)
-    set_target_properties(minifi-archive-extensions PROPERTIES
-        LINK_FLAGS "/WHOLEARCHIVE"
-    )
-elseif (APPLE)
-    set_target_properties(minifi-archive-extensions PROPERTIES
-        LINK_FLAGS "-Wl,-all_load"
-    )
-else ()
-    set_target_properties(minifi-archive-extensions PROPERTIES
-        LINK_FLAGS "-Wl,--whole-archive"
-    )
-endif ()
-
+target_link_libraries(minifi-archive-extensions ${LIBMINIFI} Threads::Threads)
+target_link_libraries(minifi-archive-extensions LibArchive::LibArchive)
 
 SET (ARCHIVE-EXTENSIONS minifi-archive-extensions PARENT_SCOPE)
 

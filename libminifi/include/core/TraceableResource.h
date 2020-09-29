@@ -36,18 +36,17 @@ namespace core {
  */
 class TraceableResource {
  public:
-
   virtual ~TraceableResource() = default;
   /**
    * Since SerializableComponents represent a runnable object, we should return traces
    */
-  virtual BackTrace &&getTraces() = 0;
+  virtual BackTrace getTraces() = 0;
 };
 
-} /* namespace core */
-} /* namespace minifi */
-} /* namespace nifi */
-} /* namespace apache */
-} /* namespace org */
+}  // namespace core
+}  // namespace minifi
+}  // namespace nifi
+}  // namespace apache
+}  // namespace org
 
-#endif /* LIBMINIFI_INCLUDE_CORE_TRACEABLERESOURCE_H_ */
+#endif  // LIBMINIFI_INCLUDE_CORE_TRACEABLERESOURCE_H_

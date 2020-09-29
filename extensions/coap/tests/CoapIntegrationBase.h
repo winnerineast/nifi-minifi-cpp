@@ -27,24 +27,21 @@ int log_message(const struct mg_connection *conn, const char *message) {
   return 1;
 }
 
-int ssl_enable(void *ssl_context, void *user_data) {
-  struct ssl_ctx_st *ctx = (struct ssl_ctx_st *) ssl_context;
+int ssl_enable(void *, void *) {
   return 0;
 }
 
 class CoapIntegrationBase : public IntegrationBase {
  public:
-  CoapIntegrationBase(uint64_t waitTime = 60000)
+  CoapIntegrationBase(uint64_t waitTime = 5000)
       : IntegrationBase(waitTime),
         server(nullptr) {
   }
 
   void setUrl(std::string url, CivetHandler *handler);
 
-  virtual ~CoapIntegrationBase();
-
   void shutdownBeforeFlowController() override {
-    stop_webserver(server);
+    server.reset();
   }
 
   virtual void run(std::string test_file_location) override {
@@ -81,23 +78,20 @@ class CoapIntegrationBase : public IntegrationBase {
 
     shutdownBeforeFlowController();
     controller->waitUnload(wait_time_);
+    controller->stopC2();
     runAssertions();
 
     cleanup();
   }
 
  protected:
-  CivetServer *server;
+  std::unique_ptr<TestServer> server;
 };
-
-CoapIntegrationBase::~CoapIntegrationBase() {
-
-}
 
 void CoapIntegrationBase::setUrl(std::string url, CivetHandler *handler) {
 
   parse_http_components(url, port, scheme, path);
-  struct mg_callbacks callback;
+  CivetCallbacks callback{};
   if (url.find("localhost") != std::string::npos) {
     if (server != nullptr) {
       server->addHandler(path, handler);
@@ -110,9 +104,9 @@ void CoapIntegrationBase::setUrl(std::string url, CivetHandler *handler) {
       callback.init_ssl = ssl_enable;
       port += "s";
       callback.log_message = log_message;
-      server = start_webserver(port, path, handler, &callback, cert, cert);
+      server = utils::make_unique<TestServer>(port, path, handler, &callback, cert, cert);
     } else {
-      server = start_webserver(port, path, handler);
+      server = utils::make_unique<TestServer>(port, path, handler);
     }
   }
 }

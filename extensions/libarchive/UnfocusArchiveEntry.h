@@ -54,8 +54,7 @@ class UnfocusArchiveEntry : public core::Processor {
     logger_(logging::LoggerFactory<UnfocusArchiveEntry>::getLogger()){
   }
   //! Destructor
-  virtual ~UnfocusArchiveEntry() {
-  }
+  virtual ~UnfocusArchiveEntry() = default;
   //! Processor Name
   static constexpr char const* ProcessorName = "UnfocusArchiveEntry";
   //! Supported Relationships
@@ -79,7 +78,7 @@ class UnfocusArchiveEntry : public core::Processor {
     std::shared_ptr<Logger> logger_;
     ArchiveMetadata *_archiveMetadata;
     static int ok_cb(struct archive *, void *d) { return ARCHIVE_OK; }
-    static ssize_t write_cb(struct archive *, void *d, const void *buffer, size_t length);
+    static la_ssize_t write_cb(struct archive *, void *d, const void *buffer, size_t length);
   };
 
  private:

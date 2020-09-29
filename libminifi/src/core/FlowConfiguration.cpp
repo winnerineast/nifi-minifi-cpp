@@ -22,6 +22,7 @@
 #include <string>
 #include "core/ClassLoader.h"
 #include "utils/StringUtils.h"
+#include "processors/ProcessorUtils.h"
 
 namespace org {
 namespace apache {
@@ -35,65 +36,34 @@ static_initializers &get_static_functions() {
 }
 
 FlowConfiguration::~FlowConfiguration() {
+  if (service_provider_ != nullptr) {
+    /* This is needed to counteract the StandardControllerServiceProvider <-> StandardControllerServiceNode shared_ptr cycle */
+    service_provider_->clearControllerServices();
+  }
 }
 
 std::shared_ptr<core::Processor> FlowConfiguration::createProcessor(std::string name, utils::Identifier & uuid) {
-  auto ptr = core::ClassLoader::getDefaultClassLoader().instantiate(name, uuid);
-  if (ptr == nullptr) {
-    ptr = core::ClassLoader::getDefaultClassLoader().instantiate("ExecuteJavaClass", uuid);
-    if (ptr != nullptr) {
-      std::shared_ptr<core::Processor> processor = std::static_pointer_cast<core::Processor>(ptr);
-      processor->initialize();
-      processor->setProperty("NiFi Processor", name);
-      processor->setStreamFactory(stream_factory_);
-      return processor;
-    }
-  }
-  if (nullptr == ptr) {
+  auto processor = minifi::processors::ProcessorUtils::createProcessor(name, name, uuid, stream_factory_);
+  if (nullptr == processor) {
     logger_->log_error("No Processor defined for %s", name);
     return nullptr;
   }
-  std::shared_ptr<core::Processor> processor = std::static_pointer_cast<core::Processor>(ptr);
-
-  // initialize the processor
-  processor->initialize();
-
-  processor->setStreamFactory(stream_factory_);
   return processor;
 }
 
 std::shared_ptr<core::Processor> FlowConfiguration::createProcessor(const std::string &name, const std::string &fullname, utils::Identifier & uuid) {
-  auto ptr = core::ClassLoader::getDefaultClassLoader().instantiate(name, uuid);
-  if (ptr == nullptr) {
-    ptr = core::ClassLoader::getDefaultClassLoader().instantiate("ExecuteJavaClass", uuid);
-    if (ptr != nullptr) {
-      std::shared_ptr<core::Processor> processor = std::static_pointer_cast<core::Processor>(ptr);
-      processor->initialize();
-      processor->setProperty("NiFi Processor", fullname);
-      processor->setStreamFactory(stream_factory_);
-      return processor;
-    }
-  }
-  if (nullptr == ptr) {
-    logger_->log_error("No Processor defined for %s", name);
+  auto processor = minifi::processors::ProcessorUtils::createProcessor(name, fullname, uuid, stream_factory_);
+  if (nullptr == processor) {
+    logger_->log_error("No Processor defined for %s", fullname);
     return nullptr;
   }
-  std::shared_ptr<core::Processor> processor = std::static_pointer_cast<core::Processor>(ptr);
-
-  // initialize the processor
-  processor->initialize();
-
-  processor->setStreamFactory(stream_factory_);
   return processor;
 }
 
 std::shared_ptr<core::Processor> FlowConfiguration::createProvenanceReportTask() {
-  std::shared_ptr<core::Processor> processor = nullptr;
-
-  processor = std::make_shared<org::apache::nifi::minifi::core::reporting::SiteToSiteProvenanceReportingTask>(stream_factory_, this->configuration_);
+  std::shared_ptr<core::Processor> processor = std::make_shared<org::apache::nifi::minifi::core::reporting::SiteToSiteProvenanceReportingTask>(stream_factory_, this->configuration_);
   // initialize the processor
   processor->initialize();
-
   return processor;
 }
 
@@ -105,7 +75,7 @@ std::unique_ptr<core::ProcessGroup> FlowConfiguration::updateFromPayload(const s
   auto payload = getRootFromPayload(yamlConfigPayload);
   if (!source.empty() && payload != nullptr) {
     std::string host, protocol, path, query, url = source;
-    int port;
+    int port = -1;
     utils::parse_url(&url, &host, &port, &protocol, &path, &query);
 
     std::string flow_id, bucket_id;

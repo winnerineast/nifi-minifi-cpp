@@ -15,10 +15,12 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#ifndef __PROCESS_SESSION_H__
-#define __PROCESS_SESSION_H__
+#ifndef LIBMINIFI_INCLUDE_CORE_PROCESSSESSION_H_
+#define LIBMINIFI_INCLUDE_CORE_PROCESSSESSION_H_
 
-#include <uuid/uuid.h>
+#include <memory>
+#include <string>
+#include <utility>
 #include <vector>
 #include <queue>
 #include <map>
@@ -31,6 +33,7 @@
 #include "FlowFileRecord.h"
 #include "Exception.h"
 #include "core/logging/LoggerConfiguration.h"
+#include "core/Deprecated.h"
 #include "FlowFile.h"
 #include "WeakReference.h"
 #include "provenance/Provenance.h"
@@ -48,12 +51,11 @@ class ProcessSession : public ReferenceContainer {
   /*!
    * Create a new process session
    */
-  ProcessSession(std::shared_ptr<ProcessContext> processContext = nullptr)
-      : process_context_(processContext),
+  ProcessSession(std::shared_ptr<ProcessContext> processContext = nullptr) // NOLINT
+      : process_context_(std::move(processContext)),
         logger_(logging::LoggerFactory<ProcessSession>::getLogger()) {
     logger_->log_trace("ProcessSession created for %s", process_context_->getProcessorNode()->getName());
-    auto repo = processContext->getProvenanceRepository();
-    //provenance_report_ = new provenance::ProvenanceReporter(repo, process_context_->getProcessorNode()->getName(), process_context_->getProcessorNode()->getName());
+    auto repo = process_context_->getProvenanceRepository();
     provenance_report_ = std::make_shared<provenance::ProvenanceReporter>(repo, process_context_->getProcessorNode()->getName(), process_context_->getProcessorNode()->getName());
   }
 
@@ -74,7 +76,7 @@ class ProcessSession : public ReferenceContainer {
   // Create a new UUID FlowFile with no content resource claim and without parent
   std::shared_ptr<core::FlowFile> create();
   // Create a new UUID FlowFile with no content resource claim and inherit all attributes from parent
-  //std::shared_ptr<core::FlowFile> create(std::shared_ptr<core::FlowFile> &&parent);
+  // std::shared_ptr<core::FlowFile> create(std::shared_ptr<core::FlowFile> &&parent);
   // Create a new UUID FlowFile with no content resource claim and inherit all attributes from parent
   std::shared_ptr<core::FlowFile> create(const std::shared_ptr<core::FlowFile> &parent);
   // Add a FlowFile to the session
@@ -83,8 +85,6 @@ class ProcessSession : public ReferenceContainer {
   std::shared_ptr<core::FlowFile> clone(const std::shared_ptr<core::FlowFile> &parent);
   // Clone a new UUID FlowFile from parent for attributes and sub set of parent content resource claim
   std::shared_ptr<core::FlowFile> clone(const std::shared_ptr<core::FlowFile> &parent, int64_t offset, int64_t size);
-  // Duplicate a FlowFile with the same UUID and all attributes and content resource claim for the roll back of the session
-  std::shared_ptr<core::FlowFile> duplicate(const std::shared_ptr<core::FlowFile> &original);
   // Transfer the FlowFile to the relationship
   virtual void transfer(const std::shared_ptr<core::FlowFile> &flow, Relationship relationship);
   // Put Attribute
@@ -102,6 +102,8 @@ class ProcessSession : public ReferenceContainer {
   // Penalize the flow
   void penalize(const std::shared_ptr<core::FlowFile> &flow);
 
+  bool outgoingConnectionsFull(const std::string& relationship);
+
   /**
    * Imports a file from the data stream
    * @param stream incoming data stream that contains the data to store into a file
@@ -110,7 +112,8 @@ class ProcessSession : public ReferenceContainer {
   void importFrom(io::DataStream &stream, const std::shared_ptr<core::FlowFile> &flow);
   // import from the data source.
   void import(std::string source, const std::shared_ptr<core::FlowFile> &flow, bool keepSource = true, uint64_t offset = 0);
-  void import(std::string source, std::vector<std::shared_ptr<FlowFileRecord>> &flows, bool keepSource, uint64_t offset, char inputDelimiter);
+  DEPRECATED(/*deprecated in*/ 0.7.0, /*will remove in */ 2.0) void import(std::string source, std::vector<std::shared_ptr<FlowFileRecord>> &flows, bool keepSource, uint64_t offset, char inputDelimiter); // NOLINT
+  DEPRECATED(/*deprecated in*/ 0.8.0, /*will remove in */ 2.0) void import(const std::string& source, std::vector<std::shared_ptr<FlowFileRecord>> &flows, uint64_t offset, char inputDelimiter);
 
   /**
    * Exports the data stream to a file
@@ -128,6 +131,8 @@ class ProcessSession : public ReferenceContainer {
   void stash(const std::string &key, const std::shared_ptr<core::FlowFile> &flow);
   // Restore content previously stashed to a key
   void restore(const std::string &key, const std::shared_ptr<core::FlowFile> &flow);
+
+  bool existsFlowFileInRelationship(const Relationship &relationship);
 
 // Prevent default copy constructor and assignment operation
 // Only support pass by reference or pointer
@@ -161,9 +166,9 @@ class ProcessSession : public ReferenceContainer {
   static std::shared_ptr<utils::IdGenerator> id_generator_;
 };
 
-} /* namespace core */
-} /* namespace minifi */
-} /* namespace nifi */
-} /* namespace apache */
-} /* namespace org */
-#endif
+}  // namespace core
+}  // namespace minifi
+}  // namespace nifi
+}  // namespace apache
+}  // namespace org
+#endif  // LIBMINIFI_INCLUDE_CORE_PROCESSSESSION_H_

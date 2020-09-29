@@ -18,6 +18,9 @@
 #ifndef LIBMINIFI_INCLUDE_C2_HEARTBEATREPORTER_H_
 #define LIBMINIFI_INCLUDE_C2_HEARTBEATREPORTER_H_
 
+#include <memory>
+#include <string>
+
 #include "C2Protocol.h"
 #include "C2Payload.h"
 #include "core/controller/ControllerServiceProvider.h"
@@ -35,7 +38,6 @@ namespace c2 {
  */
 class HeartBeatReporter : public core::Connectable {
  public:
-
   HeartBeatReporter(std::string name, utils::Identifier & uuid)
       : core::Connectable(name, uuid),
         controller_(nullptr),
@@ -49,8 +51,7 @@ class HeartBeatReporter : public core::Connectable {
     update_sink_ = updateSink;
     configuration_ = configure;
   }
-  virtual ~HeartBeatReporter() {
-  }
+  virtual ~HeartBeatReporter() = default;
   /**
    * Send a C2 payloadd to the provided URI. The direction indicates to the protocol whether or not this a transmit or receive operation.
    * Depending on the protocol this may mean different things.
@@ -77,7 +78,6 @@ class HeartBeatReporter : public core::Connectable {
   void waitForWork(uint64_t timeoutMs);
 
   virtual void yield() {
-
   }
 
   /**
@@ -89,7 +89,6 @@ class HeartBeatReporter : public core::Connectable {
   }
 
  protected:
-
   std::shared_ptr<core::controller::ControllerServiceProvider> controller_;
 
   std::shared_ptr<state::StateMonitor> update_sink_;
@@ -97,10 +96,10 @@ class HeartBeatReporter : public core::Connectable {
   std::shared_ptr<Configure> configuration_;
 };
 
-} /* namesapce c2 */
-} /* namespace minifi */
-} /* namespace nifi */
-} /* namespace apache */
-} /* namespace org */
+}  // namespace c2
+}  // namespace minifi
+}  // namespace nifi
+}  // namespace apache
+}  // namespace org
 
-#endif /* LIBMINIFI_INCLUDE_C2_HEARTBEATREPORTER_H_ */
+#endif  // LIBMINIFI_INCLUDE_C2_HEARTBEATREPORTER_H_

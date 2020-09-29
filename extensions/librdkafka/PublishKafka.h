@@ -17,9 +17,21 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#ifndef __PUT_KAFKA_H__
-#define __PUT_KAFKA_H__
+#ifndef EXTENSIONS_LIBRDKAFKA_PUBLISHKAFKA_H_
+#define EXTENSIONS_LIBRDKAFKA_PUBLISHKAFKA_H_
 
+#include <atomic>
+#include <cstdint>
+#include <map>
+#include <memory>
+#include <mutex>
+#include <set>
+#include <string>
+#include <condition_variable>
+#include <utility>
+#include <vector>
+
+#include "utils/GeneralUtils.h"
 #include "FlowFileRecord.h"
 #include "core/Processor.h"
 #include "core/ProcessSession.h"
@@ -27,8 +39,10 @@
 #include "core/Resource.h"
 #include "core/Property.h"
 #include "core/logging/LoggerConfiguration.h"
+#include "core/logging/Logger.h"
+#include "utils/RegexUtils.h"
 #include "rdkafka.h"
-#include <regex>
+#include "KafkaConnection.h"
 
 namespace org {
 namespace apache {
@@ -51,189 +65,6 @@ namespace processors {
 #define SECURITY_PROTOCOL_SASL_SSL "sasl_ssl"
 #define KAFKA_KEY_ATTRIBUTE "kafka.key"
 
-class KafkaConnectionKey {
- public:
-  std::string client_id_;
-  std::string brokers_;
-};
-
-class KafkaTopic {
- public:
-  KafkaTopic(rd_kafka_topic_t *topic_reference, rd_kafka_topic_conf_t *topic_conf)
-      : topic_conf_(topic_conf),
-        topic_reference_(topic_reference) {
-
-  }
-
-  ~KafkaTopic() {
-    if (topic_reference_) {
-      rd_kafka_topic_destroy(topic_reference_);
-      topic_reference_ = 0;
-    }
-  }
-
-  rd_kafka_topic_conf_t *getTopicConf() {
-    return topic_conf_;
-  }
-
-  rd_kafka_topic_t *getTopic() {
-    return topic_reference_;
-  }
-
- private:
-  rd_kafka_topic_conf_t *topic_conf_;
-  rd_kafka_topic_t *topic_reference_;
-};
-
-struct KafkaConnectionComparator {
-
-  bool operator()(const KafkaConnectionKey& a, const KafkaConnectionKey& b) const {
-    if (a.brokers_ != b.brokers_) {
-      return a.brokers_ < b.brokers_;
-    } else {
-      return a.client_id_ < b.client_id_;
-    }
-  }
-};
-
-class KafkaLease {
- public:
-  KafkaLease(std::atomic<bool> *lease)
-      : lease_(lease) {
-    *lease_ = true;
-  }
-  ~KafkaLease() {
-    *lease_ = false;
-  }
- private:
-  std::atomic<bool> *lease_;
-};
-
-class KafkaConnection {
-
- public:
-
-  explicit KafkaConnection(const KafkaConnectionKey &key)
-      : conf_(nullptr),
-        kafka_connection_(nullptr) {
-    lease_ = false;
-    initialized_ = false;
-    key_ = key;
-  }
-
-  ~KafkaConnection() {
-    remove();
-  }
-
-  void remove() {
-    topics_.clear();
-    if (kafka_connection_) {
-      rd_kafka_flush(kafka_connection_, 10 * 1000); /* wait for max 10 seconds */
-      rd_kafka_destroy(kafka_connection_);
-      kafka_connection_ = 0;
-    }
-  }
-
-  bool initialized() {
-    return initialized_;
-  }
-
-  void setConnection(rd_kafka_t *producer, rd_kafka_conf_t *conf) {
-    std::lock_guard<std::mutex> lock(mutex_);
-    kafka_connection_ = producer;
-    conf_ = conf;
-    initialized_ = true;
-  }
-
-  rd_kafka_conf_t *getConf() {
-    return conf_;
-  }
-
-  rd_kafka_t *getConnection() {
-    return kafka_connection_;
-  }
-
-  KafkaLease obtainOwnership() {
-    while (lease_) {
-    }
-    std::lock_guard<std::mutex> lock(mutex_);
-    return KafkaLease(&lease_);
-  }
-
-  bool hasTopic(const std::string &topic) {
-    return topics_.find(topic) != std::end(topics_);
-  }
-
-  std::shared_ptr<KafkaTopic> getTopic(const std::string &topic) {
-    auto topicObj = topics_.find(topic);
-    if (topicObj != topics_.end()) {
-      return topicObj->second;
-    }
-    return nullptr;
-  }
-
-  KafkaConnectionKey const *getKey() const {
-    return &key_;
-  }
-
-  void putTopic(const std::string &topicName, const std::shared_ptr<KafkaTopic> topic) {
-    topics_.insert(std::make_pair(topicName, topic));
-  }
-
- private:
-
-  std::mutex mutex_;
-
-  std::atomic<bool> lease_;
-
-  std::atomic<bool> initialized_;
-
-  KafkaConnectionKey key_;
-
-  std::map<std::string, std::shared_ptr<KafkaTopic> > topics_;
-
-  rd_kafka_conf_t *conf_;
-  rd_kafka_t *kafka_connection_;
-};
-
-class KafkaPool {
- public:
-
-  explicit KafkaPool(int max)
-      : max_(max) {
-  }
-
-  bool removeConnection(const KafkaConnectionKey &key) {
-    std::lock_guard<std::mutex> lock(mutex_);
-    return map_.erase(key) == 1;
-  }
-
-  std::shared_ptr<KafkaConnection> getOrCreateConnection(const KafkaConnectionKey &key) {
-    std::lock_guard<std::mutex> lock(mutex_);
-    auto connection = map_.find(key);
-    if (connection != map_.end()) {
-      return connection->second;
-    }
-    if (map_.size() > max_) {
-      auto advanceIter = map_.begin();
-      auto elemToRemove = map_.size() - max_;
-      std::advance(advanceIter, elemToRemove);
-      map_.erase(map_.begin(), advanceIter);
-    }
-    auto newConnection = std::make_shared<KafkaConnection>(key);
-    map_.insert(std::make_pair(key, newConnection));
-    return newConnection;
-  }
-
- private:
-  std::mutex mutex_;
-
-  int max_;
-
-  std::map<KafkaConnectionKey, std::shared_ptr<KafkaConnection>, KafkaConnectionComparator> map_;
-
-};
-
 // PublishKafka Class
 class PublishKafka : public core::Processor {
  public:
@@ -242,127 +73,267 @@ class PublishKafka : public core::Processor {
    * Create a new processor
    */
   explicit PublishKafka(std::string name, utils::Identifier uuid = utils::Identifier())
-      : core::Processor(name, uuid),
-        connection_pool_(5),
-        logger_(logging::LoggerFactory<PublishKafka>::getLogger()) {
-    max_seg_size_ = -1;
+      : core::Processor(std::move(name), uuid),
+        logger_(logging::LoggerFactory<PublishKafka>::getLogger()),
+        interrupted_(false) {
   }
-  // Destructor
-  virtual ~PublishKafka() {
-  }
-  // Processor Name
+
+  virtual ~PublishKafka() = default;
+
   static constexpr char const* ProcessorName = "PublishKafka";
+
   // Supported Properties
-  static core::Property SeedBrokers;
-  static core::Property Topic;
-  static core::Property DeliveryGuarantee;
-  static core::Property MaxMessageSize;
-  static core::Property RequestTimeOut;
-  static core::Property ClientName;
-  static core::Property BatchSize;
-  static core::Property AttributeNameRegex;
-  static core::Property QueueBufferMaxTime;
-  static core::Property QueueBufferMaxSize;
-  static core::Property QueueBufferMaxMessage;
-  static core::Property CompressCodec;
-  static core::Property MaxFlowSegSize;
-  static core::Property SecurityProtocol;
-  static core::Property SecurityCA;
-  static core::Property SecurityCert;
-  static core::Property SecurityPrivateKey;
-  static core::Property SecurityPrivateKeyPassWord;
-  static core::Property KerberosServiceName;
-  static core::Property KerberosPrincipal;
-  static core::Property KerberosKeytabPath;
-  static core::Property MessageKeyField;
+  static const core::Property SeedBrokers;
+  static const core::Property Topic;
+  static const core::Property DeliveryGuarantee;
+  static const core::Property MaxMessageSize;
+  static const core::Property RequestTimeOut;
+  static const core::Property MessageTimeOut;
+  static const core::Property ClientName;
+  static const core::Property BatchSize;
+  static const core::Property TargetBatchPayloadSize;
+  static const core::Property AttributeNameRegex;
+  static const core::Property QueueBufferMaxTime;
+  static const core::Property QueueBufferMaxSize;
+  static const core::Property QueueBufferMaxMessage;
+  static const core::Property CompressCodec;
+  static const core::Property MaxFlowSegSize;
+  static const core::Property SecurityProtocol;
+  static const core::Property SecurityCA;
+  static const core::Property SecurityCert;
+  static const core::Property SecurityPrivateKey;
+  static const core::Property SecurityPrivateKeyPassWord;
+  static const core::Property KerberosServiceName;
+  static const core::Property KerberosPrincipal;
+  static const core::Property KerberosKeytabPath;
+  static const core::Property MessageKeyField;
+  static const core::Property DebugContexts;
+  static const core::Property FailEmptyFlowFiles;
 
   // Supported Relationships
-  static core::Relationship Failure;
-  static core::Relationship Success;
+  static const core::Relationship Failure;
+  static const core::Relationship Success;
+
+  // Message
+  enum class MessageStatus : uint8_t {
+    MESSAGESTATUS_UNCOMPLETE,
+    MESSAGESTATUS_ERROR,
+    MESSAGESTATUS_SUCCESS
+  };
+
+  struct MessageResult {
+    MessageStatus status = MessageStatus::MESSAGESTATUS_UNCOMPLETE;
+    rd_kafka_resp_err_t err_code = RD_KAFKA_RESP_ERR_UNKNOWN;
+  };
+
+  struct FlowFileResult {
+    bool flow_file_error = false;
+    std::vector<MessageResult> messages;
+  };
+
+  struct Messages {
+    std::mutex mutex;
+    std::condition_variable cv;
+    std::vector<FlowFileResult> flow_files;
+    bool interrupted = false;
+
+    void waitForCompletion() {
+      std::unique_lock<std::mutex> lock(mutex);
+      cv.wait(lock, [this]() -> bool {
+        if (interrupted) {
+          return true;
+        }
+        size_t index = 0U;
+        return std::all_of(this->flow_files.begin(), this->flow_files.end(), [&](const FlowFileResult& flow_file) {
+          index++;
+          if (flow_file.flow_file_error) {
+            return true;
+          }
+          return std::all_of(flow_file.messages.begin(), flow_file.messages.end(), [](const MessageResult& message) {
+            return message.status != MessageStatus::MESSAGESTATUS_UNCOMPLETE;
+          });
+        });
+      });
+    }
+
+    void modifyResult(size_t index, const std::function<void(FlowFileResult&)>& fun) {
+      std::unique_lock<std::mutex> lock(mutex);
+      fun(flow_files.at(index));
+      cv.notify_all();
+    }
+
+    size_t addFlowFile() {
+      std::lock_guard<std::mutex> lock(mutex);
+      flow_files.emplace_back();
+      return flow_files.size() - 1;
+    }
+
+    void iterateFlowFiles(const std::function<void(size_t /*index*/, const FlowFileResult& /*flow_file_result*/)>& fun) {
+      std::lock_guard<std::mutex> lock(mutex);
+      for (size_t index = 0U; index < flow_files.size(); index++) {
+        fun(index, flow_files[index]);
+      }
+    }
+
+    void interrupt() {
+      std::unique_lock<std::mutex> lock(mutex);
+      interrupted = true;
+      cv.notify_all();
+    }
+
+    bool wasInterrupted() {
+      std::lock_guard<std::mutex> lock(mutex);
+      return interrupted;
+    }
+  };
 
   // Nest Callback Class for read stream
   class ReadCallback : public InputStreamCallback {
    public:
-    ReadCallback(uint64_t max_seg_size, const std::string &key, rd_kafka_topic_t *rkt, rd_kafka_t *rk, const std::shared_ptr<core::FlowFile> flowFile, const std::regex &attributeNameRegex)
-        : max_seg_size_(max_seg_size),
-          key_(key),
+    struct rd_kafka_headers_deleter {
+      void operator()(rd_kafka_headers_t* ptr) const noexcept {
+        rd_kafka_headers_destroy(ptr);
+      }
+    };
+
+    using rd_kafka_headers_unique_ptr = std::unique_ptr<rd_kafka_headers_t, rd_kafka_headers_deleter>;
+
+   private:
+    void allocate_message_object(const size_t segment_num) const {
+      messages_->modifyResult(flow_file_index_, [segment_num](FlowFileResult& flow_file) {
+        // allocate message object to be filled in by the callback in produce()
+        if (flow_file.messages.size() < segment_num + 1) {
+          flow_file.messages.resize(segment_num + 1);
+        }
+      });
+    }
+
+    static rd_kafka_headers_unique_ptr make_headers(const core::FlowFile& flow_file, utils::Regex& attribute_name_regex) {
+      const gsl::owner<rd_kafka_headers_t*> result{ rd_kafka_headers_new(8) };
+      if (!result) { throw std::bad_alloc{}; }
+
+      for (const auto& kv : flow_file.getAttributes()) {
+        if (attribute_name_regex.match(kv.first)) {
+          rd_kafka_header_add(result, kv.first.c_str(), kv.first.size(), kv.second.c_str(), kv.second.size());
+        }
+      }
+      return rd_kafka_headers_unique_ptr{ result };
+    }
+
+    rd_kafka_resp_err_t produce(const size_t segment_num, std::vector<unsigned char>& buffer, const size_t buflen) const {
+      const std::shared_ptr<Messages> messages_ptr_copy = this->messages_;
+      const auto flow_file_index_copy = this->flow_file_index_;
+      const auto produce_callback = [messages_ptr_copy, flow_file_index_copy, segment_num](rd_kafka_t * /*rk*/, const rd_kafka_message_t *rkmessage) {
+        messages_ptr_copy->modifyResult(flow_file_index_copy, [segment_num, rkmessage](FlowFileResult &flow_file) {
+          auto &message = flow_file.messages.at(segment_num);
+          message.err_code = rkmessage->err;
+          message.status = message.err_code == 0 ? MessageStatus::MESSAGESTATUS_SUCCESS : MessageStatus::MESSAGESTATUS_ERROR;
+        });
+      };
+      // release()d below, deallocated in PublishKafka::messageDeliveryCallback
+      auto callback_ptr = utils::make_unique<std::function<void(rd_kafka_t*, const rd_kafka_message_t*)>>(std::move(produce_callback));
+
+      allocate_message_object(segment_num);
+
+      const gsl::owner<rd_kafka_headers_t*> hdrs_copy = rd_kafka_headers_copy(hdrs.get());
+      const auto err = rd_kafka_producev(rk_, RD_KAFKA_V_RKT(rkt_), RD_KAFKA_V_PARTITION(RD_KAFKA_PARTITION_UA), RD_KAFKA_V_MSGFLAGS(RD_KAFKA_MSG_F_COPY), RD_KAFKA_V_VALUE(buffer.data(), buflen),
+                                         RD_KAFKA_V_HEADERS(hdrs_copy), RD_KAFKA_V_KEY(key_.c_str(), key_.size()), RD_KAFKA_V_OPAQUE(callback_ptr.get()), RD_KAFKA_V_END);
+      if (err == RD_KAFKA_RESP_ERR_NO_ERROR) {
+        // in case of failure, messageDeliveryCallback is not called and callback_ptr will delete the callback
+        // in case of success, messageDeliveryCallback takes ownership of the callback, so we no longer need to delete it
+        (void)callback_ptr.release();
+      } else {
+        // in case of failure, rd_kafka_producev doesn't take ownership of the headers, so we need to delete them
+        rd_kafka_headers_destroy(hdrs_copy);
+      }
+      return err;
+    }
+
+   public:
+    ReadCallback(const uint64_t max_seg_size,
+                 std::string key,
+                 rd_kafka_topic_t * const rkt,
+                 rd_kafka_t * const rk,
+                 const core::FlowFile& flowFile,
+                 utils::Regex &attributeNameRegex,
+                 std::shared_ptr<Messages> messages,
+                 const size_t flow_file_index,
+                 const bool fail_empty_flow_files)
+        : flow_size_(flowFile.getSize()),
+          max_seg_size_(max_seg_size == 0 || flow_size_ < max_seg_size ? flow_size_ : max_seg_size),
+          key_(std::move(key)),
           rkt_(rkt),
           rk_(rk),
-          flowFile_(flowFile),
-          attributeNameRegex_(attributeNameRegex) {
-      flow_size_ = flowFile_->getSize();
-      status_ = 0;
-      read_size_ = 0;
-      hdrs = nullptr;
-    }
-    ~ReadCallback() {
-      if (hdrs) {
-        rd_kafka_headers_destroy(hdrs);
-      }
-    }
-    int64_t process(std::shared_ptr<io::BaseStream> stream) {
-      if (flow_size_ < max_seg_size_)
-        max_seg_size_ = flow_size_;
+          hdrs(make_headers(flowFile, attributeNameRegex)),
+          messages_(std::move(messages)),
+          flow_file_index_(flow_file_index),
+          fail_empty_flow_files_(fail_empty_flow_files)
+    { }
+
+    int64_t process(const std::shared_ptr<io::BaseStream> stream) {
       std::vector<unsigned char> buffer;
-      buffer.reserve(max_seg_size_);
+
+      buffer.resize(max_seg_size_);
       read_size_ = 0;
       status_ = 0;
-      rd_kafka_resp_err_t err;
+      called_ = true;
 
-      for (auto kv : flowFile_->getAttributes()) {
-        if (regex_match(kv.first, attributeNameRegex_)) {
-          if (!hdrs) {
-            hdrs = rd_kafka_headers_new(8);
-          }
-          err = rd_kafka_header_add(hdrs, kv.first.c_str(), kv.first.size(), kv.second.c_str(), kv.second.size());
-        }
+      assert(max_seg_size_ != 0 || flow_size_ == 0 && "max_seg_size_ == 0 implies flow_size_ == 0");
+      // ^^ therefore checking max_seg_size_ == 0 handles both division by zero and flow_size_ == 0 cases
+      const size_t reserved_msg_capacity = max_seg_size_ == 0 ? 1 : utils::intdiv_ceil(flow_size_, max_seg_size_);
+      messages_->modifyResult(flow_file_index_, [reserved_msg_capacity](FlowFileResult& flow_file) {
+        flow_file.messages.reserve(reserved_msg_capacity);
+      });
+
+      // If the flow file is empty, we still want to send the message, unless the user wants to fail_empty_flow_files_
+      if (flow_size_ == 0 && !fail_empty_flow_files_) {
+        produce(0, buffer, 0);
+        return 0;
       }
 
-      while (read_size_ < flow_size_) {
-        int readRet = stream->read(&buffer[0], max_seg_size_);
+      for (size_t segment_num = 0; read_size_ < flow_size_; ++segment_num) {
+        const int readRet = stream->read(buffer.data(), buffer.size());
         if (readRet < 0) {
           status_ = -1;
+          error_ = "Failed to read from stream";
           return read_size_;
         }
-        if (readRet > 0) {
-          if (hdrs) {
-            rd_kafka_headers_t *hdrs_copy;
-            hdrs_copy = rd_kafka_headers_copy(hdrs);
-            err = rd_kafka_producev(rk_, RD_KAFKA_V_RKT(rkt_), RD_KAFKA_V_PARTITION(RD_KAFKA_PARTITION_UA), RD_KAFKA_V_MSGFLAGS(RD_KAFKA_MSG_F_COPY), RD_KAFKA_V_VALUE(&buffer[0], readRet),
-                                    RD_KAFKA_V_HEADERS(hdrs_copy), RD_KAFKA_V_KEY(key_.c_str(), key_.size()), RD_KAFKA_V_END);
-            if (err) {
-              rd_kafka_headers_destroy(hdrs_copy);
-            }
-          } else {
-            err = rd_kafka_producev(rk_, RD_KAFKA_V_RKT(rkt_), RD_KAFKA_V_PARTITION(RD_KAFKA_PARTITION_UA), RD_KAFKA_V_MSGFLAGS(RD_KAFKA_MSG_F_COPY), RD_KAFKA_V_VALUE(&buffer[0], readRet),
-                                    RD_KAFKA_V_KEY(key_.c_str(), key_.size()), RD_KAFKA_V_END);
-          }
-          if (err) {
-            status_ = -1;
-            return read_size_;
-          }
-          read_size_ += readRet;
-        } else {
-          break;
+
+        if (readRet <= 0) { break; }
+
+        const auto err = produce(segment_num, buffer, readRet);
+        if (err) {
+          messages_->modifyResult(flow_file_index_, [segment_num, err](FlowFileResult& flow_file) {
+            auto& message = flow_file.messages.at(segment_num);
+            message.status = MessageStatus::MESSAGESTATUS_ERROR;
+            message.err_code = err;
+          });
+          status_ = -1;
+          error_ = rd_kafka_err2str(err);
+          return read_size_;
         }
+        read_size_ += readRet;
       }
       return read_size_;
     }
-    uint64_t flow_size_;
-    uint64_t max_seg_size_;
-    std::string key_;
-    rd_kafka_topic_t *rkt_;
-    rd_kafka_t *rk_;
-    rd_kafka_headers_t *hdrs;
-    std::shared_ptr<core::FlowFile> flowFile_;
-    int status_;
-    int read_size_;
-    std::regex attributeNameRegex_;
+
+    const uint64_t flow_size_ = 0;
+    const uint64_t max_seg_size_ = 0;
+    const std::string key_;
+    rd_kafka_topic_t * const rkt_ = nullptr;
+    rd_kafka_t * const rk_ = nullptr;
+    const rd_kafka_headers_unique_ptr hdrs;  // not null
+    const std::shared_ptr<Messages> messages_;
+    const size_t flow_file_index_;
+    int status_ = 0;
+    std::string error_;
+    int read_size_ = 0;
+    bool called_ = false;
+    const bool fail_empty_flow_files_ = true;
   };
 
  public:
-
-  virtual bool supportsDynamicProperties() {
+  bool supportsDynamicProperties() override {
     return true;
   }
 
@@ -372,35 +343,41 @@ class PublishKafka : public core::Processor {
    * @param sessionFactory process session factory that is used when creating
    * ProcessSession objects.
    */
-  virtual void onTrigger(const std::shared_ptr<core::ProcessContext> &context, const std::shared_ptr<core::ProcessSession> &session) override;
-  virtual void initialize() override;
-  virtual void onSchedule(const std::shared_ptr<core::ProcessContext> &context, const std::shared_ptr<core::ProcessSessionFactory> &sessionFactory) override;
+  void onTrigger(const std::shared_ptr<core::ProcessContext> &context, const std::shared_ptr<core::ProcessSession> &session) override;
+  void initialize() override;
+  void onSchedule(const std::shared_ptr<core::ProcessContext> &context, const std::shared_ptr<core::ProcessSessionFactory> &sessionFactory) override;
+  void notifyStop() override;
 
  protected:
-
-  bool configureNewConnection(const std::shared_ptr<KafkaConnection> &conn, const std::shared_ptr<core::ProcessContext> &context, const std::shared_ptr<core::FlowFile> &ff);
+  bool configureNewConnection(const std::shared_ptr<core::ProcessContext> &context);
+  bool createNewTopic(const std::shared_ptr<core::ProcessContext> &context, const std::string& topic_name);
 
  private:
+  static void messageDeliveryCallback(rd_kafka_t* rk, const rd_kafka_message_t* rkmessage, void* opaque);
+
   std::shared_ptr<logging::Logger> logger_;
 
-  KafkaPool connection_pool_;
+  KafkaConnectionKey key_;
+  std::unique_ptr<KafkaConnection> conn_;
+  std::mutex connection_mutex_;
 
-//  rd_kafka_conf_t *conf_;
-  //rd_kafka_t *rk_;
-  //1rd_kafka_topic_conf_t *topic_conf_;
-  //rd_kafka_topic_t *rkt_;
-  //std::string topic_;
-  uint64_t max_seg_size_;
-  std::regex attributeNameRegex;
+  uint32_t batch_size_;
+  uint64_t target_batch_payload_size_;
+  uint64_t max_flow_seg_size_;
+  utils::Regex attributeNameRegex_;
+
+  std::atomic<bool> interrupted_;
+  std::mutex messages_mutex_;
+  std::set<std::shared_ptr<Messages>> messages_set_;
 };
 
 REGISTER_RESOURCE(PublishKafka, "This Processor puts the contents of a FlowFile to a Topic in Apache Kafka. The content of a FlowFile becomes the contents of a Kafka message. "
                   "This message is optionally assigned a key by using the <Kafka Key> Property.");
 
-} /* namespace processors */
-} /* namespace minifi */
-} /* namespace nifi */
-} /* namespace apache */
-} /* namespace org */
+}  // namespace processors
+}  // namespace minifi
+}  // namespace nifi
+}  // namespace apache
+}  // namespace org
 
-#endif
+#endif  // EXTENSIONS_LIBRDKAFKA_PUBLISHKAFKA_H_

@@ -34,7 +34,7 @@ bool FileSystemRepository::initialize(const std::shared_ptr<minifi::Configure> &
   if (configuration->get(Configure::nifi_dbcontent_repository_directory_default, value)) {
     directory_ = value;
   } else {
-    directory_ = configuration->getHome() + "/contentrepository";
+    directory_ = configuration->getHome();
   }
   utils::file::FileUtils::create_dir(directory_);
   return true;
@@ -42,8 +42,8 @@ bool FileSystemRepository::initialize(const std::shared_ptr<minifi::Configure> &
 void FileSystemRepository::stop() {
 }
 
-std::shared_ptr<io::BaseStream> FileSystemRepository::write(const std::shared_ptr<minifi::ResourceClaim> &claim) {
-  return std::make_shared<io::FileStream>(claim->getContentFullPath());
+std::shared_ptr<io::BaseStream> FileSystemRepository::write(const std::shared_ptr<minifi::ResourceClaim> &claim, bool append) {
+  return std::make_shared<io::FileStream>(claim->getContentFullPath(), append);
 }
 
 bool FileSystemRepository::exists(const std::shared_ptr<minifi::ResourceClaim> &streamId) {

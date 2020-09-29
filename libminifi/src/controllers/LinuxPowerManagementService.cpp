@@ -16,12 +16,16 @@
  * limitations under the License.
  */
 #include "controllers/LinuxPowerManagementService.h"
-#include <utility>
+
+#include <fstream>
 #include <limits>
-#include <string>
-#include <vector>
 #include <set>
+#include <string>
+#include <utility>
+#include <vector>
+
 #include "utils/StringUtils.h"
+
 namespace org {
 namespace apache {
 namespace nifi {
@@ -61,7 +65,7 @@ uint16_t LinuxPowerManagerService::getMaxThreads() {
 }
 
 bool LinuxPowerManagerService::canIncrease() {
-  for (const auto path_pair : paths_) {
+  for (const auto& path_pair : paths_) {
     try {
       auto capacity = path_pair.first;
       auto status = path_pair.second;
@@ -104,7 +108,7 @@ bool LinuxPowerManagerService::shouldReduce() {
   bool all_discharging = !paths_.empty();
 
   int battery_sum = 0;
-  for (const auto path_pair : paths_) {
+  for (const auto& path_pair : paths_) {
     try {
       auto capacity = path_pair.first;
       auto status = path_pair.second;
@@ -214,8 +218,8 @@ void LinuxPowerManagerService::onEnable() {
     logger_->log_trace("Could not enable ");
   }
 }
-} /* namespace controllers */
-} /* namespace minifi */
-} /* namespace nifi */
-} /* namespace apache */
-} /* namespace org */
+}  // namespace controllers
+}  // namespace minifi
+}  // namespace nifi
+}  // namespace apache
+}  // namespace org

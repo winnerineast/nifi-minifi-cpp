@@ -15,17 +15,19 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#ifndef EXTENSION_RDKAFKALOADER_H
-#define EXTENSION_RDKAFKALOADER_H
+#ifndef EXTENSIONS_LIBRDKAFKA_RDKAFKALOADER_H_
+#define EXTENSIONS_LIBRDKAFKA_RDKAFKALOADER_H_
+
+#include <memory>
+#include <string>
+#include <vector>
 
 #include "PublishKafka.h"
 #include "core/ClassLoader.h"
 
 class RdKafkaFactory : public core::ObjectFactory {
  public:
-  RdKafkaFactory() {
-
-  }
+  RdKafkaFactory() = default;
 
   /**
    * Gets the name of the object.
@@ -57,10 +59,9 @@ class RdKafkaFactory : public core::ObjectFactory {
   }
 
   static bool added;
-
 };
 
 extern "C" {
 DLL_EXPORT void *createRdKafkaFactory(void);
 }
-#endif /* EXTENSION_RDKAFKALOADER_H */
+#endif  // EXTENSIONS_LIBRDKAFKA_RDKAFKALOADER_H_

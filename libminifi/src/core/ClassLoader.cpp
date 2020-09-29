@@ -25,8 +25,7 @@ namespace nifi {
 namespace minifi {
 namespace core {
 
-ClassLoader::ClassLoader() {
-}
+ClassLoader::ClassLoader() = default;
 
 ClassLoader &ClassLoader::getDefaultClassLoader() {
   static ClassLoader ret;
@@ -63,6 +62,15 @@ uint16_t ClassLoader::registerResource(const std::string &resource, const std::s
   ObjectFactory *factory = create_factory_func();
 
   std::lock_guard<std::mutex> lock(internal_mutex_);
+
+  auto initializer = factory->getInitializer();
+  if (initializer != nullptr) {
+    if (!initializer->initialize()) {
+      delete factory;
+      return RESOURCE_FAILURE;
+    }
+    initializers_.emplace_back(std::move(initializer));
+  }
 
   for (auto class_name : factory->getClassNames()) {
     loaded_factories_[class_name] = std::unique_ptr<ObjectFactory>(factory->assign(class_name));

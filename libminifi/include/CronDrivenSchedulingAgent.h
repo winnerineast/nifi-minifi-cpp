@@ -17,17 +17,21 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#ifndef CRON_DRIVEN_SCHEDULING_AGENT_H__
-#define CRON_DRIVEN_SCHEDULING_AGENT_H__
+#ifndef LIBMINIFI_INCLUDE_CRONDRIVENSCHEDULINGAGENT_H_
+#define LIBMINIFI_INCLUDE_CRONDRIVENSCHEDULINGAGENT_H_
+
+#include <chrono>
+#include <map>
+#include <memory>
+#include <string>
 
 #include "core/logging/Logger.h"
-#include "core/Processor.h"
 #include "core/ProcessContext.h"
+#include "core/Processor.h"
 #include "core/ProcessSessionFactory.h"
-#include "ThreadedSchedulingAgent.h"
-#include <chrono>
-
 #include "Cron.h"
+#include "ThreadedSchedulingAgent.h"
+
 namespace org {
 namespace apache {
 namespace nifi {
@@ -41,16 +45,17 @@ class CronDrivenSchedulingAgent : public ThreadedSchedulingAgent {
    * Create a new event driven scheduling agent.
    */
   CronDrivenSchedulingAgent(std::shared_ptr<core::controller::ControllerServiceProvider> controller_service_provider, std::shared_ptr<core::Repository> repo,
-                            std::shared_ptr<core::Repository> flow_repo, std::shared_ptr<core::ContentRepository> content_repo, std::shared_ptr<Configure> configuration)
-      : ThreadedSchedulingAgent(controller_service_provider, repo, flow_repo, content_repo, configuration) {
+                            std::shared_ptr<core::Repository> flow_repo, std::shared_ptr<core::ContentRepository> content_repo, std::shared_ptr<Configure> configuration,
+                            utils::ThreadPool<utils::TaskRescheduleInfo> &thread_pool)
+      : ThreadedSchedulingAgent(controller_service_provider, repo, flow_repo, content_repo, configuration, thread_pool) {
   }
   // Destructor
-  virtual ~CronDrivenSchedulingAgent() {
-  }
+  virtual ~CronDrivenSchedulingAgent() = default;
   // Run function for the thread
-  uint64_t run(const std::shared_ptr<core::Processor> &processor, const std::shared_ptr<core::ProcessContext> &processContext, const std::shared_ptr<core::ProcessSessionFactory> &sessionFactory);
+  utils::TaskRescheduleInfo run(const std::shared_ptr<core::Processor> &processor, const std::shared_ptr<core::ProcessContext> &processContext,
+      const std::shared_ptr<core::ProcessSessionFactory> &sessionFactory) override;
 
-  virtual void stop() {
+  void stop() override {
     std::lock_guard<std::mutex> locK(mutex_);
     schedules_.clear();
     last_exec_.clear();
@@ -64,11 +69,10 @@ class CronDrivenSchedulingAgent : public ThreadedSchedulingAgent {
   // Only support pass by reference or pointer
   CronDrivenSchedulingAgent(const CronDrivenSchedulingAgent &parent);
   CronDrivenSchedulingAgent &operator=(const CronDrivenSchedulingAgent &parent);
-
 };
 
-} /* namespace minifi */
-} /* namespace nifi */
-} /* namespace apache */
-} /* namespace org */
-#endif
+}  // namespace minifi
+}  // namespace nifi
+}  // namespace apache
+}  // namespace org
+#endif  // LIBMINIFI_INCLUDE_CRONDRIVENSCHEDULINGAGENT_H_

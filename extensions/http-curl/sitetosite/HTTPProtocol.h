@@ -26,7 +26,6 @@
 #include <set>
 #include <thread>
 #include <algorithm>
-#include <uuid/uuid.h>
 #include "HTTPTransaction.h"
 #include "sitetosite/SiteToSite.h"
 #include "sitetosite/SiteToSiteClient.h"
@@ -83,9 +82,7 @@ class HttpSiteToSiteClient : public sitetosite::SiteToSiteClient {
     peer_state_ = READY;
   }
   // Destructor
-  virtual ~HttpSiteToSiteClient() {
-
-  }
+  virtual ~HttpSiteToSiteClient() = default;
 
   void setPeer(std::unique_ptr<SiteToSitePeer> peer) override {
     peer_ = std::move(peer);
@@ -176,6 +173,7 @@ class HttpSiteToSiteClient : public sitetosite::SiteToSiteClient {
       logger_->log_info("HTTP Site2Site setup http proxy host %s", this->peer_->getHTTPProxy().host);
       http_client_->setHTTPProxy(this->peer_->getHTTPProxy());
     }
+    http_client_->setReadTimeout(idle_timeout_);
     return http_client_;
   }
 

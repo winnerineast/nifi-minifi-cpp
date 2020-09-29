@@ -24,7 +24,6 @@
 #include "core/Core.h"
 #include "provenance/Provenance.h"
 #include "core/logging/LoggerConfiguration.h"
-#include "concurrentqueue.h"
 namespace org {
 namespace apache {
 namespace nifi {
@@ -38,7 +37,6 @@ namespace provenance {
 
 class ProvenanceRepository : public core::Repository, public std::enable_shared_from_this<ProvenanceRepository> {
  public:
-
   ProvenanceRepository(std::string name, utils::Identifier uuid)
       : ProvenanceRepository(name){
 
@@ -56,17 +54,13 @@ class ProvenanceRepository : public core::Repository, public std::enable_shared_
     db_ = NULL;
   }
 
-  // Destructor
-  virtual ~ProvenanceRepository() {
-    if (db_)
-      delete db_;
+  void printStats();
+
+  virtual bool isNoop() {
+    return false;
   }
 
-  virtual void flush();
-
   void start() {
-    if (this->purge_period_ <= 0)
-      return;
     if (running_)
       return;
     running_ = true;
@@ -80,26 +74,45 @@ class ProvenanceRepository : public core::Repository, public std::enable_shared_
     if (config->get(Configure::nifi_provenance_repository_directory_default, value)) {
       directory_ = value;
     }
-    logger_->log_debug("NiFi Provenance Repository Directory %s", directory_);
+    logger_->log_debug("MiNiFi Provenance Repository Directory %s", directory_);
     if (config->get(Configure::nifi_provenance_repository_max_storage_size, value)) {
       core::Property::StringToInt(value, max_partition_bytes_);
     }
-    logger_->log_debug("NiFi Provenance Max Partition Bytes %d", max_partition_bytes_);
+    logger_->log_debug("MiNiFi Provenance Max Partition Bytes %d", max_partition_bytes_);
     if (config->get(Configure::nifi_provenance_repository_max_storage_time, value)) {
       core::TimeUnit unit;
       if (core::Property::StringToTime(value, max_partition_millis_, unit) && core::Property::ConvertTimeUnitToMS(max_partition_millis_, unit, max_partition_millis_)) {
       }
     }
-    logger_->log_debug("NiFi Provenance Max Storage Time: [%d] ms", max_partition_millis_);
+    logger_->log_debug("MiNiFi Provenance Max Storage Time: [%d] ms", max_partition_millis_);
     rocksdb::Options options;
     options.create_if_missing = true;
     options.use_direct_io_for_flush_and_compaction = true;
     options.use_direct_reads = true;
-    rocksdb::Status status = rocksdb::DB::Open(options, directory_, &db_);
+    // Rocksdb write buffers act as a log of database operation: grow till reaching the limit, serialized after
+    // This shouldn't go above 16MB and the configured total size of the db should cap it as well
+    int64_t max_buffer_size = 16 << 20;
+    options.write_buffer_size = std::min(max_buffer_size, max_partition_bytes_);
+    options.max_write_buffer_number = 4;
+    options.min_write_buffer_number_to_merge = 1;
+
+    options.compaction_style = rocksdb::CompactionStyle::kCompactionStyleFIFO;
+    options.compaction_options_fifo = rocksdb::CompactionOptionsFIFO(max_partition_bytes_, false);
+    if(max_partition_millis_ > 0) {
+      options.compaction_options_fifo.ttl = max_partition_millis_ / 1000;
+    }
+
+    logger_->log_info("Write buffer: %llu", options.write_buffer_size);
+    logger_->log_info("Max partition bytes: %llu", max_partition_bytes_);
+    logger_->log_info("Ttl: %llu", options.compaction_options_fifo.ttl);
+
+    rocksdb::DB* db;
+    rocksdb::Status status = rocksdb::DB::Open(options, directory_, &db);
     if (status.ok()) {
-      logger_->log_debug("NiFi Provenance Repository database open %s success", directory_);
+      logger_->log_debug("MiNiFi Provenance Repository database open %s success", directory_);
+      db_.reset(db);
     } else {
-      logger_->log_error("NiFi Provenance Repository database open %s fail", directory_);
+      logger_->log_error("MiNiFi Provenance Repository database open %s failed: %s", directory_, status.ToString());
       return false;
     }
 
@@ -107,37 +120,30 @@ class ProvenanceRepository : public core::Repository, public std::enable_shared_
   }
   // Put
   virtual bool Put(std::string key, const uint8_t *buf, size_t bufLen) {
-    if (repo_full_) {
-      return false;
-    }
-
     // persist to the DB
     rocksdb::Slice value((const char *) buf, bufLen);
-    rocksdb::Status status;
-    status = db_->Put(rocksdb::WriteOptions(), key, value);
-    if (status.ok())
-      return true;
-    else
-      return false;
+    return db_->Put(rocksdb::WriteOptions(), key, value).ok();
   }
+
+  virtual bool MultiPut(const std::vector<std::pair<std::string, std::unique_ptr<minifi::io::DataStream>>>& data) {
+    rocksdb::WriteBatch batch;
+    for (const auto &item: data) {
+      rocksdb::Slice value((const char *) item.second->getBuffer(), item.second->getSize());
+      if (!batch.Put(item.first, value).ok()) {
+        return false;
+      }
+    }
+    return db_->Write(rocksdb::WriteOptions(), &batch).ok();
+  }
+
   // Delete
   virtual bool Delete(std::string key) {
-    keys_to_delete.enqueue(key);
+    // The repo is cleaned up by itself, there is no need to delete items.
     return true;
   }
   // Get
   virtual bool Get(const std::string &key, std::string &value) {
-    rocksdb::Status status;
-    status = db_->Get(rocksdb::ReadOptions(), key, &value);
-    if (status.ok())
-      return true;
-    else
-      return false;
-  }
-
-  // Remove event
-  void removeEvent(ProvenanceEventRecord *event) {
-    Delete(event->getEventId());
+    return db_->Get(rocksdb::ReadOptions(), key, &value).ok();
   }
 
   virtual bool Serialize(const std::string &key, const uint8_t *buffer, const size_t bufferSize) {
@@ -145,7 +151,7 @@ class ProvenanceRepository : public core::Repository, public std::enable_shared_
   }
 
   virtual bool get(std::vector<std::shared_ptr<core::CoreComponent>> &store, size_t max_size) {
-    rocksdb::Iterator* it = db_->NewIterator(rocksdb::ReadOptions());
+    std::unique_ptr<rocksdb::Iterator> it(db_->NewIterator(rocksdb::ReadOptions()));
     for (it->SeekToFirst(); it->Valid(); it->Next()) {
       std::shared_ptr<ProvenanceEventRecord> eventRead = std::make_shared<ProvenanceEventRecord>();
       std::string key = it->key().ToString();
@@ -155,12 +161,11 @@ class ProvenanceRepository : public core::Repository, public std::enable_shared_
         store.push_back(std::dynamic_pointer_cast<core::CoreComponent>(eventRead));
       }
     }
-    delete it;
     return true;
   }
 
   virtual bool DeSerialize(std::vector<std::shared_ptr<core::SerializableComponent>> &records, size_t &max_size, std::function<std::shared_ptr<core::SerializableComponent>()> lambda) {
-    rocksdb::Iterator* it = db_->NewIterator(rocksdb::ReadOptions());
+    std::unique_ptr<rocksdb::Iterator> it(db_->NewIterator(rocksdb::ReadOptions()));
     size_t requested_batch = max_size;
     max_size = 0;
     for (it->SeekToFirst(); it->Valid(); it->Next()) {
@@ -173,19 +178,13 @@ class ProvenanceRepository : public core::Repository, public std::enable_shared_
         max_size++;
         records.push_back(eventRead);
       }
-
     }
-    delete it;
-
-    if (max_size > 0) {
-      return true;
-    } else {
-      return false;
-    }
+    return max_size > 0;
   }
+
   //! get record
   void getProvenanceRecord(std::vector<std::shared_ptr<ProvenanceEventRecord>> &records, int maxSize) {
-    rocksdb::Iterator* it = db_->NewIterator(rocksdb::ReadOptions());
+    std::unique_ptr<rocksdb::Iterator> it(db_->NewIterator(rocksdb::ReadOptions()));
     for (it->SeekToFirst(); it->Valid(); it->Next()) {
       std::shared_ptr<ProvenanceEventRecord> eventRead = std::make_shared<ProvenanceEventRecord>();
       std::string key = it->key().ToString();
@@ -195,11 +194,10 @@ class ProvenanceRepository : public core::Repository, public std::enable_shared_
         records.push_back(eventRead);
       }
     }
-    delete it;
   }
 
   virtual bool DeSerialize(std::vector<std::shared_ptr<core::SerializableComponent>> &store, size_t &max_size) {
-    rocksdb::Iterator* it = db_->NewIterator(rocksdb::ReadOptions());
+    std::unique_ptr<rocksdb::Iterator> it(db_->NewIterator(rocksdb::ReadOptions()));
     max_size = 0;
     for (it->SeekToFirst(); it->Valid(); it->Next()) {
       std::shared_ptr<ProvenanceEventRecord> eventRead = std::make_shared<ProvenanceEventRecord>();
@@ -211,29 +209,22 @@ class ProvenanceRepository : public core::Repository, public std::enable_shared_
       if (store.size() >= max_size)
         break;
     }
-    delete it;
-    if (max_size > 0) {
-      return true;
-    } else {
-      return false;
-    }
+    return max_size > 0;
   }
-  //! purge record
-  void purgeProvenanceRecord(std::vector<std::shared_ptr<ProvenanceEventRecord>> &records) {
-    for (auto record : records) {
-      Delete(record->getEventId());
-    }
-    flush();
-  }
+
   // destroy
   void destroy() {
-    if (db_) {
-      delete db_;
-      db_ = NULL;
-    }
+    db_.reset();
   }
   // Run function for the thread
   void run();
+
+  uint64_t getKeyCount() const {
+    std::string key_count;
+    db_->GetProperty("rocksdb.estimate-num-keys", &key_count);
+
+    return std::stoull(key_count);
+  }
 
   // Prevent default copy constructor and assignment operation
   // Only support pass by reference or pointer
@@ -241,8 +232,7 @@ class ProvenanceRepository : public core::Repository, public std::enable_shared_
   ProvenanceRepository &operator=(const ProvenanceRepository &parent) = delete;
 
  private:
-  moodycamel::ConcurrentQueue<std::string> keys_to_delete;
-  rocksdb::DB* db_;
+  std::unique_ptr<rocksdb::DB> db_;
   std::shared_ptr<logging::Logger> logger_;
 };
 

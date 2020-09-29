@@ -15,17 +15,17 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "io/FileStream.h"
+#include <iostream>
 #include <string>
 #include <vector>
-#include <iostream>
-#include <uuid/uuid.h>
+
+#include "io/FileStream.h"
 #include "../TestBase.h"
 
 TEST_CASE("TestFileOverWrite", "[TestFiles]") {
   TestController testController;
   char format[] = "/tmp/gt.XXXXXX";
-  char *dir = testController.createTempDirectory(format);
+  auto dir = testController.createTempDirectory(format);
 
   std::fstream file;
   std::stringstream ss;
@@ -63,7 +63,7 @@ TEST_CASE("TestFileOverWrite", "[TestFiles]") {
 TEST_CASE("TestFileBadArgumentNoChange", "[TestLoader]") {
   TestController testController;
   char format[] = "/tmp/gt.XXXXXX";
-  char *dir = testController.createTempDirectory(format);
+  auto dir = testController.createTempDirectory(format);
 
   std::fstream file;
   std::stringstream ss;
@@ -101,7 +101,7 @@ TEST_CASE("TestFileBadArgumentNoChange", "[TestLoader]") {
 TEST_CASE("TestFileBadArgumentNoChange2", "[TestLoader]") {
   TestController testController;
   char format[] = "/tmp/gt.XXXXXX";
-  char *dir = testController.createTempDirectory(format);
+  auto dir = testController.createTempDirectory(format);
 
   std::fstream file;
   std::stringstream ss;
@@ -139,7 +139,7 @@ TEST_CASE("TestFileBadArgumentNoChange2", "[TestLoader]") {
 TEST_CASE("TestFileBadArgumentNoChange3", "[TestLoader]") {
   TestController testController;
   char format[] = "/tmp/gt.XXXXXX";
-  char *dir = testController.createTempDirectory(format);
+  auto dir = testController.createTempDirectory(format);
 
   std::fstream file;
   std::stringstream ss;
@@ -177,7 +177,7 @@ TEST_CASE("TestFileBadArgumentNoChange3", "[TestLoader]") {
 TEST_CASE("TestFileBeyondEnd3", "[TestLoader]") {
   TestController testController;
   char format[] = "/tmp/gt.XXXXXX";
-  char *dir = testController.createTempDirectory(format);
+  auto dir = testController.createTempDirectory(format);
 
   std::fstream file;
   std::stringstream ss;
@@ -211,7 +211,7 @@ TEST_CASE("TestFileBeyondEnd3", "[TestLoader]") {
 TEST_CASE("TestFileExceedSize", "[TestLoader]") {
   TestController testController;
   char format[] = "/tmp/gt.XXXXXX";
-  char *dir = testController.createTempDirectory(format);
+  auto dir = testController.createTempDirectory(format);
 
   std::fstream file;
   std::stringstream ss;

@@ -16,7 +16,6 @@
  * limitations under the License.
  */
 
-#include <uuid/uuid.h>
 #include <fstream>
 #include <map>
 #include <memory>
@@ -55,7 +54,7 @@ TEST_CASE("Test Put", "[PutSQLPut]") {  // NOLINT
 
   // Define directory for test db
   std::string test_dir("/tmp/gt.XXXXXX");
-  REQUIRE(testController.createTempDirectory(&test_dir[0]) != nullptr);
+  REQUIRE(!testController.createTempDirectory(&test_dir[0]).empty());
 
   // Define test db file
   std::string test_db(test_dir);
@@ -137,7 +136,7 @@ TEST_CASE("Test Put Content", "[PutSQLPutContent]") {  // NOLINT
 
   // Define directory for test db
   std::string test_dir("/tmp/gt.XXXXXX");
-  REQUIRE(testController.createTempDirectory(&test_dir[0]) != nullptr);
+  REQUIRE(!testController.createTempDirectory(&test_dir[0]).empty());
 
   // Define test db file
   std::string test_db(test_dir);
@@ -145,7 +144,7 @@ TEST_CASE("Test Put Content", "[PutSQLPutContent]") {  // NOLINT
 
   // Define directory for test input file
   std::string test_in_dir("/tmp/gt.XXXXXX");
-  REQUIRE(testController.createTempDirectory(&test_in_dir[0]) != nullptr);
+  REQUIRE(!testController.createTempDirectory(&test_in_dir[0]).empty());
 
   // Define test input file
   std::string test_file(test_in_dir);
@@ -230,7 +229,7 @@ TEST_CASE("Test Exec", "[ExecuteSQL]") {  // NOLINT
 
   // Define directory for test db
   std::string test_dir("/tmp/gt.XXXXXX");
-  REQUIRE(testController.createTempDirectory(&test_dir[0]) != nullptr);
+  REQUIRE(!testController.createTempDirectory(&test_dir[0]).empty());
 
   // Define test db file
   std::string test_db(test_dir);
@@ -289,7 +288,7 @@ TEST_CASE("Test Exec 2", "[ExecuteSQL2]") {  // NOLINT
 
   // Define directory for test db
   std::string test_dir("/tmp/gt.XXXXXX");
-  REQUIRE(testController.createTempDirectory(&test_dir[0]) != nullptr);
+  REQUIRE(!testController.createTempDirectory(&test_dir[0]).empty());
 
   // Define test db file
   std::string test_db(test_dir);
@@ -382,7 +381,7 @@ TEST_CASE("Test Exec 3", "[ExecuteSQL3]") {  // NOLINT
 
   // Define directory for test db
   std::string test_dir("/tmp/gt.XXXXXX");
-  REQUIRE(testController.createTempDirectory(&test_dir[0]) != nullptr);
+  REQUIRE(!testController.createTempDirectory(&test_dir[0]).empty());
 
   // Define test db file
   std::string test_db(test_dir);
@@ -390,7 +389,7 @@ TEST_CASE("Test Exec 3", "[ExecuteSQL3]") {  // NOLINT
 
   // Define directory for test input file
   std::string test_in_dir("/tmp/gt.XXXXXX");
-  REQUIRE(testController.createTempDirectory(&test_in_dir[0]) != nullptr);
+  REQUIRE(!testController.createTempDirectory(&test_in_dir[0]).empty());
 
   // Define test input file
   std::string test_file(test_in_dir);

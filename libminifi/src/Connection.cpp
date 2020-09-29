@@ -28,8 +28,8 @@
 #include <chrono>
 #include <thread>
 #include <iostream>
+#include <list>
 #include "core/FlowFile.h"
-#include "Connection.h"
 #include "core/Processor.h"
 #include "core/logging/LoggerConfiguration.h"
 
@@ -49,6 +49,7 @@ Connection::Connection(const std::shared_ptr<core::Repository> &flow_repository,
   max_data_queue_size_ = 0;
   expired_duration_ = 0;
   queued_data_size_ = 0;
+  drop_empty_ = false;
 
   logger_->log_debug("Connection %s created", name_);
 }
@@ -64,6 +65,7 @@ Connection::Connection(const std::shared_ptr<core::Repository> &flow_repository,
   max_data_queue_size_ = 0;
   expired_duration_ = 0;
   queued_data_size_ = 0;
+  drop_empty_ = false;
 
   logger_->log_debug("Connection %s created", name_);
 }
@@ -83,6 +85,7 @@ Connection::Connection(const std::shared_ptr<core::Repository> &flow_repository,
   max_data_queue_size_ = 0;
   expired_duration_ = 0;
   queued_data_size_ = 0;
+  drop_empty_ = false;
 
   logger_->log_debug("Connection %s created", name_);
 }
@@ -103,6 +106,7 @@ Connection::Connection(const std::shared_ptr<core::Repository> &flow_repository,
   max_data_queue_size_ = 0;
   expired_duration_ = 0;
   queued_data_size_ = 0;
+  drop_empty_ = false;
 
   logger_->log_debug("Connection %s created", name_);
 }
@@ -130,6 +134,10 @@ bool Connection::isFull() {
 }
 
 void Connection::put(std::shared_ptr<core::FlowFile> flow) {
+  if (drop_empty_ && flow->getSize() == 0) {
+    logger_->log_info("Dropping empty flow file: %s", flow->getUUIDStr());
+    return;
+  }
   {
     std::lock_guard<std::mutex> lock(mutex_);
 
@@ -145,6 +153,9 @@ void Connection::put(std::shared_ptr<core::FlowFile> flow) {
     FlowFileRecord event(flow_repository_, content_repo_, flow, this->uuidStr_);
     if (event.Serialize()) {
       flow->setStoredToRepository(true);
+    } else {
+      logger_->log_error("Failed to serialize FlowFileRecord to repo!");
+      throw Exception(PROCESS_SESSION_EXCEPTION, "Failed to put flowfile to repository");
     }
   }
 
@@ -152,6 +163,54 @@ void Connection::put(std::shared_ptr<core::FlowFile> flow) {
   if (dest_connectable_) {
     logger_->log_debug("Notifying %s that %s was inserted", dest_connectable_->getName(), flow->getUUIDStr());
     dest_connectable_->notifyWork();
+  }
+}
+
+void Connection::multiPut(std::vector<std::shared_ptr<core::FlowFile>>& flows) {
+  std::vector<std::pair<std::string, std::unique_ptr<io::DataStream>>> flowData;
+
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+
+    for (auto &ff : flows) {
+      if (drop_empty_ && ff->getSize() == 0) {
+        logger_->log_info("Dropping empty flow file: %s", ff->getUUIDStr());
+        continue;
+      }
+
+      queue_.push(ff);
+      queued_data_size_ += ff->getSize();
+
+      logger_->log_debug("Enqueue flow file UUID %s to connection %s", ff->getUUIDStr(), name_);
+
+      if (!ff->isStored()) {
+        // Save to the flowfile repo
+        FlowFileRecord event(flow_repository_, content_repo_, ff, this->uuidStr_);
+
+        std::unique_ptr<io::DataStream> stramptr(new io::DataStream());
+        event.Serialize(*stramptr.get());
+
+        flowData.emplace_back(event.getUUIDStr(), std::move(stramptr));
+      }
+    }
+  }
+
+  if (!flow_repository_->MultiPut(flowData)) {
+    logger_->log_error("Failed execute multiput on FF repo!");
+    throw Exception(PROCESS_SESSION_EXCEPTION, "Failed to put flowfiles to repository");
+  }
+
+  for (auto& ff : flows) {
+    if (drop_empty_ && ff->getSize() == 0) {
+      continue;
+    }
+
+    ff->setStoredToRepository(true);
+
+    if (dest_connectable_) {
+      logger_->log_debug("Notifying %s that flowfiles were inserted", dest_connectable_->getName());
+      dest_connectable_->notifyWork();
+    }
   }
 }
 
@@ -203,22 +262,24 @@ std::shared_ptr<core::FlowFile> Connection::poll(std::set<std::shared_ptr<core::
   return NULL;
 }
 
-void Connection::drain() {
+void Connection::drain(bool delete_permanently) {
   std::lock_guard<std::mutex> lock(mutex_);
 
   while (!queue_.empty()) {
     std::shared_ptr<core::FlowFile> item = queue_.front();
     queue_.pop();
-    logger_->log_debug("Delete flow file UUID %s from connection %s, because it expired", item->getUUIDStr(), name_);
-    if (flow_repository_->Delete(item->getUUIDStr())) {
-      item->setStoredToRepository(false);
+    logger_->log_debug("Delete flow file UUID %s from connection %s", item->getUUIDStr(), name_);
+    if (delete_permanently) {
+      if (flow_repository_->Delete(item->getUUIDStr())) {
+        item->setStoredToRepository(false);
+      }
     }
   }
   queued_data_size_ = 0;
   logger_->log_debug("Drain connection %s", name_);
 }
 
-} /* namespace minifi */
-} /* namespace nifi */
-} /* namespace apache */
-} /* namespace org */
+}  // namespace minifi
+}  // namespace nifi
+}  // namespace apache
+}  // namespace org

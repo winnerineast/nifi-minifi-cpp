@@ -17,10 +17,12 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#ifndef __CONNECTION_H__
-#define __CONNECTION_H__
+#ifndef LIBMINIFI_INCLUDE_CONNECTION_H_
+#define LIBMINIFI_INCLUDE_CONNECTION_H_
 
-#include <uuid/uuid.h>
+#include <memory>
+#include <set>
+#include <string>
 #include <vector>
 #include <queue>
 #include <map>
@@ -31,7 +33,6 @@
 #include "core/Connectable.h"
 #include "core/logging/Logger.h"
 #include "core/Relationship.h"
-#include "core/Connectable.h"
 #include "core/FlowFile.h"
 #include "core/Repository.h"
 
@@ -54,8 +55,7 @@ class Connection : public core::Connectable, public std::enable_shared_from_this
   explicit Connection(const std::shared_ptr<core::Repository> &flow_repository, const std::shared_ptr<core::ContentRepository> &content_repo, std::string name, utils::Identifier & uuid,
                       utils::Identifier & srcUUID, utils::Identifier & destUUID);
   // Destructor
-  virtual ~Connection() {
-  }
+  virtual ~Connection() = default;
 
   // Set Source Processor UUID
   void setSourceUUID(utils::Identifier &uuid) {
@@ -131,6 +131,15 @@ class Connection : public core::Connectable, public std::enable_shared_from_this
   uint64_t getFlowExpirationDuration() {
     return expired_duration_;
   }
+
+  void setDropEmptyFlowFiles(bool drop) {
+    drop_empty_ = drop;
+  }
+
+  bool getDropEmptyFlowFiles() const {
+    return drop_empty_;
+  }
+
   // Check whether the queue is empty
   bool isEmpty();
   // Check whether the queue is full to apply back pressure
@@ -144,28 +153,30 @@ class Connection : public core::Connectable, public std::enable_shared_from_this
   uint64_t getQueueDataSize() {
     return queued_data_size_;
   }
-  void put(std::shared_ptr<core::Connectable> flow) {
+  void put(std::shared_ptr<core::Connectable> flow) override {
     std::shared_ptr<core::FlowFile> ff = std::static_pointer_cast<core::FlowFile>(flow);
     if (nullptr != ff) {
       put(ff);
     }
   }
+
   // Put the flow file into queue
   void put(std::shared_ptr<core::FlowFile> flow);
+
+  // Put multiple flowfiles into the queue
+  void multiPut(std::vector<std::shared_ptr<core::FlowFile>>& flows);
   // Poll the flow file from queue, the expired flow file record also being returned
   std::shared_ptr<core::FlowFile> poll(std::set<std::shared_ptr<core::FlowFile>> &expiredFlowRecords);
   // Drain the flow records
-  void drain();
+  void drain(bool delete_permanently);
 
-  void yield() {
+  void yield() override {}
 
-  }
-
-  bool isWorkAvailable() {
+  bool isWorkAvailable() override {
     return !isEmpty();
   }
 
-  bool isRunning() {
+  bool isRunning() override {
     return true;
   }
 
@@ -192,6 +203,7 @@ class Connection : public core::Connectable, public std::enable_shared_from_this
   std::shared_ptr<core::ContentRepository> content_repo_;
 
  private:
+  bool drop_empty_;
   // Mutex for protection
   std::mutex mutex_;
   // Queued data size
@@ -205,10 +217,9 @@ class Connection : public core::Connectable, public std::enable_shared_from_this
   // Only support pass by reference or pointer
   Connection(const Connection &parent);
   Connection &operator=(const Connection &parent);
-
 };
-} /* namespace minifi */
-} /* namespace nifi */
-} /* namespace apache */
-} /* namespace org */
-#endif
+}  // namespace minifi
+}  // namespace nifi
+}  // namespace apache
+}  // namespace org
+#endif  // LIBMINIFI_INCLUDE_CONNECTION_H_

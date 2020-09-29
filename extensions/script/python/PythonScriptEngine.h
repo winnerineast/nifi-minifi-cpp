@@ -29,6 +29,8 @@
 #include "PyProcessSession.h"
 #include "../ScriptException.h"
 
+#pragma GCC visibility push(hidden)
+
 namespace org {
 namespace apache {
 namespace nifi {
@@ -43,8 +45,7 @@ struct Interpreter {
       : guard_(false) {
   }
 
-  ~Interpreter() {
-  }
+  ~Interpreter() = default;
 
   Interpreter(const Interpreter &other) = delete;
 
@@ -161,11 +162,9 @@ class PythonScriptEngine : public script::ScriptEngine {
 
   class TriggerInit {
    public:
-    TriggerInit() {
-    }
+    TriggerInit() = default;
 
-    ~TriggerInit() {
-    }
+    ~TriggerInit() = default;
 
    private:
     std::shared_ptr<script::ScriptProcessContext> script_context_;
@@ -235,5 +234,7 @@ class PythonScriptEngine : public script::ScriptEngine {
 } /* namespace nifi */
 } /* namespace apache */
 } /* namespace org */
+
+#pragma GCC visibility pop
 
 #endif //NIFI_MINIFI_CPP_PYTHONSCRIPTENGINE_H

@@ -16,8 +16,14 @@
  * limitations under the License.
  */
 
-#ifndef LIBMINIFI_INCLUDE_CORE_SITETOSITE_SITETOSITECLIENT_H_
-#define LIBMINIFI_INCLUDE_CORE_SITETOSITE_SITETOSITECLIENT_H_
+#ifndef LIBMINIFI_INCLUDE_SITETOSITE_SITETOSITECLIENT_H_
+#define LIBMINIFI_INCLUDE_SITETOSITE_SITETOSITECLIENT_H_
+
+#include <map>
+#include <memory>
+#include <string>
+#include <utility>
+#include <vector>
 
 #include "Peer.h"
 #include "SiteToSite.h"
@@ -52,9 +58,7 @@ class DataPacket {
 };
 
 class SiteToSiteClient : public core::Connectable {
-
  public:
-
   SiteToSiteClient()
       : core::Connectable("SitetoSiteClient"),
         peer_state_(IDLE),
@@ -73,9 +77,7 @@ class SiteToSiteClient : public core::Connectable {
     _currentCodecVersionIndex = 0;
   }
 
-  virtual ~SiteToSiteClient() {
-
-  }
+  virtual ~SiteToSiteClient() = default;
 
   void setSSLContextService(const std::shared_ptr<minifi::controllers::SSLContextService> &context_service) {
     ssl_context_service_ = context_service;
@@ -97,18 +99,17 @@ class SiteToSiteClient : public core::Connectable {
    */
   virtual bool transfer(TransferDirection direction, const std::shared_ptr<core::ProcessContext> &context, const std::shared_ptr<core::ProcessSession> &session) {
 #ifndef WIN32
-	  if (__builtin_expect(direction == SEND, 1)) {
+    if (__builtin_expect(direction == SEND, 1)) {
       return transferFlowFiles(context, session);
     } else {
       return receiveFlowFiles(context, session);
     }
 #else
-	  if (direction == SEND) {
-		  return transferFlowFiles(context, session);
-	  }
-	  else {
-		  return receiveFlowFiles(context, session);
-	  }
+    if (direction == SEND) {
+      return transferFlowFiles(context, session);
+    } else {
+      return receiveFlowFiles(context, session);
+    }
 #endif
   }
 
@@ -151,6 +152,13 @@ class SiteToSiteClient : public core::Connectable {
   }
 
   /**
+   * Sets the idle timeout.
+   */
+  void setIdleTimeout(std::chrono::milliseconds timeout) {
+     idle_timeout_ = timeout;
+  }
+
+  /**
    * Sets the base peer for this interface.
    */
   virtual void setPeer(std::unique_ptr<SiteToSitePeer> peer) {
@@ -183,7 +191,6 @@ class SiteToSiteClient : public core::Connectable {
   }
 
   virtual void yield() {
-
   }
 
   /**
@@ -209,7 +216,6 @@ class SiteToSiteClient : public core::Connectable {
   virtual int16_t send(std::string transactionID, DataPacket *packet, const std::shared_ptr<FlowFileRecord> &flowFile, const std::shared_ptr<core::ProcessSession> &session);
 
  protected:
-
   // Cancel the transaction
   virtual void cancel(std::string transactionID);
   // Complete the transaction
@@ -222,7 +228,7 @@ class SiteToSiteClient : public core::Connectable {
   virtual void deleteTransaction(std::string transactionID);
 
   virtual void tearDown() = 0;
-  
+
   // read Respond
   virtual int readResponse(const std::shared_ptr<Transaction> &transaction, RespondCode &code, std::string &message);
   // write respond
@@ -245,6 +251,9 @@ class SiteToSiteClient : public core::Connectable {
 
   // portId
   utils::Identifier port_id_;
+
+  // idleTimeout
+  std::chrono::milliseconds idle_timeout_{15000};
 
   // Peer Connection
   std::unique_ptr<SiteToSitePeer> peer_;
@@ -271,24 +280,22 @@ class SiteToSiteClient : public core::Connectable {
 
  private:
   std::shared_ptr<logging::Logger> logger_;
-
-
 };
 
 // Nest Callback Class for write stream
 class WriteCallback : public OutputStreamCallback {
  public:
-  WriteCallback(DataPacket *packet)
+  WriteCallback(DataPacket *packet) // NOLINT
       : _packet(packet) {
   }
   DataPacket *_packet;
-  //void process(std::ofstream *stream) {
+  // void process(std::ofstream *stream) {
   int64_t process(std::shared_ptr<io::BaseStream> stream) {
     uint8_t buffer[16384];
     int len = _packet->_size;
     int total = 0;
     while (len > 0) {
-	  int size = len < 16384 ? len : 16384; 
+      int size = len < 16384 ? len : 16384;
       int ret = _packet->transaction_->getStream().readData(buffer, size);
       if (ret != size) {
         logging::LOG_ERROR(_packet->logger_reference_) << "Site2Site Receive Flow Size " << size << " Failed " << ret << ", should have received " << len;
@@ -305,7 +312,7 @@ class WriteCallback : public OutputStreamCallback {
 // Nest Callback Class for read stream
 class ReadCallback : public InputStreamCallback {
  public:
-  ReadCallback(DataPacket *packet)
+  ReadCallback(DataPacket *packet) // NOLINT
       : _packet(packet) {
   }
   DataPacket *_packet;
@@ -335,10 +342,10 @@ class ReadCallback : public InputStreamCallback {
   }
 };
 
-} /* namespace sitetosite */
-} /* namespace minifi */
-} /* namespace nifi */
-} /* namespace apache */
-} /* namespace org */
+}  // namespace sitetosite
+}  // namespace minifi
+}  // namespace nifi
+}  // namespace apache
+}  // namespace org
 
-#endif /* LIBMINIFI_INCLUDE_CORE_SITETOSITE_SITETOSITECLIENT_H_ */
+#endif  // LIBMINIFI_INCLUDE_SITETOSITE_SITETOSITECLIENT_H_

@@ -46,6 +46,7 @@ namespace repository {
 #define MAX_FLOWFILE_REPOSITORY_STORAGE_SIZE (10*1024*1024) // 10M
 #define MAX_FLOWFILE_REPOSITORY_ENTRY_LIFE_TIME (600000) // 10 minute
 #define FLOWFILE_REPOSITORY_PURGE_PERIOD (2000) // 2000 msec
+#define FLOWFILE_REPOSITORY_RETRY_INTERVAL_INCREMENTS (500)  // msec
 
 /**
  * Flow File repository
@@ -75,7 +76,13 @@ class FlowFileRepository : public core::Repository, public std::enable_shared_fr
       delete db_;
   }
 
+  virtual bool isNoop() {
+    return false;
+  }
+
   virtual void flush();
+
+  virtual void printStats();
 
   // initialize
   virtual bool initialize(const std::shared_ptr<Configure> &configure) {
@@ -99,14 +106,23 @@ class FlowFileRepository : public core::Repository, public std::enable_shared_fr
     options.create_if_missing = true;
     options.use_direct_io_for_flush_and_compaction = true;
     options.use_direct_reads = true;
+
+    // Write buffers are used as db operation logs. When they get filled the events are merged and serialized.
+    // The default size is 64MB.
+    // In our case it's usually too much, causing sawtooth in memory consumption. (Consumes more than the whole MiniFi)
+    // To avoid DB write issues during heavy load it's recommended to have high number of buffer.
+    // Rocksdb's stall feature can also trigger in case the number of buffers is >= 3.
+    // The more buffers we have the more memory rocksdb can utilize without significant memory consumption under low load.
+    options.write_buffer_size = 8 << 20;
+    options.max_write_buffer_number = 20;
+    options.min_write_buffer_number_to_merge = 1;
     rocksdb::Status status = rocksdb::DB::Open(options, directory_, &db_);
     if (status.ok()) {
       logger_->log_debug("NiFi FlowFile Repository database open %s success", directory_);
     } else {
       logger_->log_error("NiFi FlowFile Repository database open %s fail", directory_);
-      return false;
     }
-    return true;
+    return status.ok();
   }
 
   virtual void run();
@@ -114,14 +130,24 @@ class FlowFileRepository : public core::Repository, public std::enable_shared_fr
   virtual bool Put(std::string key, const uint8_t *buf, size_t bufLen) {
     // persistent to the DB
     rocksdb::Slice value((const char *) buf, bufLen);
-    rocksdb::Status status;
-    repo_size_ += bufLen;
-    status = db_->Put(rocksdb::WriteOptions(), key, value);
-    if (status.ok())
-      return true;
-    else
-      return false;
+    auto operation = [this, &key, &value]() { return db_->Put(rocksdb::WriteOptions(), key, value); };
+    return ExecuteWithRetry(operation);
   }
+
+  virtual bool MultiPut(const std::vector<std::pair<std::string, std::unique_ptr<minifi::io::DataStream>>>& data) {
+    rocksdb::WriteBatch batch;
+    for (const auto &item: data) {
+      rocksdb::Slice value((const char *) item.second->getBuffer(), item.second->getSize());
+      if (!batch.Put(item.first, value).ok()) {
+        logger_->log_error("Failed to add item to batch operation");
+        return false;
+      }
+    }
+    auto operation = [this, &batch]() { return db_->Write(rocksdb::WriteOptions(), &batch); };
+    return ExecuteWithRetry(operation);
+  }
+
+
   /**
    * 
    * Deletes the key
@@ -138,12 +164,7 @@ class FlowFileRepository : public core::Repository, public std::enable_shared_fr
   virtual bool Get(const std::string &key, std::string &value) {
     if (db_ == nullptr)
       return false;
-    rocksdb::Status status;
-    status = db_->Get(rocksdb::ReadOptions(), key, &value);
-    if (status.ok())
-      return true;
-    else
-      return false;
+    return db_->Get(rocksdb::ReadOptions(), key, &value).ok();
   }
 
   virtual void loadComponent(const std::shared_ptr<core::ContentRepository> &content_repo);
@@ -161,6 +182,8 @@ class FlowFileRepository : public core::Repository, public std::enable_shared_fr
   }
 
  private:
+
+  bool ExecuteWithRetry(std::function<rocksdb::Status()> operation);
 
   /**
    * Initialize the repository

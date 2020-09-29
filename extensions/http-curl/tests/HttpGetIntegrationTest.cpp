@@ -17,51 +17,38 @@
  */
 
 #define CURLOPT_SSL_VERIFYPEER_DISABLE 1
-#include <sys/stat.h>
 #undef NDEBUG
 #include <cassert>
 #include <utility>
 #include <chrono>
-#include <fstream>
 #include <memory>
 #include <string>
 #include <thread>
-#include <type_traits>
 #include <vector>
 #include "HTTPClient.h"
 #include "InvokeHTTP.h"
 #include "TestServer.h"
 #include "TestBase.h"
 #include "utils/StringUtils.h"
-#include "core/Core.h"
-#include "core/logging/Logger.h"
-#include "core/ProcessGroup.h"
 #include "core/yaml/YamlConfiguration.h"
 #include "FlowController.h"
 #include "properties/Configure.h"
 #include "unit/ProvenanceTestHelper.h"
 #include "io/StreamFactory.h"
-#include "processors/InvokeHTTP.h"
-#include "processors/ListenHTTP.h"
 #include "processors/LogAttribute.h"
+#include "HTTPIntegrationBase.h"
 
-void waitToVerifyProcessor() {
-  std::this_thread::sleep_for(std::chrono::seconds(10));
-}
-
-int log_message(const struct mg_connection *conn, const char *message) {
-  puts(message);
-  return 1;
-}
-
-int ssl_enable(void *ssl_context, void *user_data) {
-  struct ssl_ctx_st *ctx = (struct ssl_ctx_st *) ssl_context;
-  return 0;
+namespace {
+  void waitToVerifyProcessor() {
+    std::this_thread::sleep_for(std::chrono::seconds(10));
+  }
 }
 
 class HttpResponder : public CivetHandler {
+ private:
  public:
-  bool handleGet(CivetServer *server, struct mg_connection *conn) {
+  bool handleGet(CivetServer *server, struct mg_connection *conn) override {
+    puts("handle get");
     static const std::string site2site_rest_resp = "hi this is a get test";
     mg_printf(conn, "HTTP/1.1 200 OK\r\nContent-Type: "
               "text/plain\r\nContent-Length: %lu\r\nConnection: close\r\n\r\n",
@@ -72,26 +59,22 @@ class HttpResponder : public CivetHandler {
 };
 
 int main(int argc, char **argv) {
-  init_webserver();
+  const cmd_args args = parse_cmdline_args(argc, argv);
+
   LogTestController::getInstance().setDebug<core::Processor>();
   LogTestController::getInstance().setDebug<core::ProcessSession>();
   LogTestController::getInstance().setDebug<utils::HTTPClient>();
   LogTestController::getInstance().setDebug<minifi::controllers::SSLContextService>();
   LogTestController::getInstance().setDebug<minifi::processors::InvokeHTTP>();
   LogTestController::getInstance().setDebug<minifi::processors::LogAttribute>();
-  std::string key_dir, test_file_location;
-  if (argc > 1) {
-    test_file_location = argv[1];
-    key_dir = argv[2];
-  }
+
   std::shared_ptr<minifi::Configure> configuration = std::make_shared<minifi::Configure>();
-  configuration->set(minifi::Configure::nifi_default_directory, key_dir);
-  mkdir("content_repository", S_IRWXU | S_IRWXG | S_IROTH | S_IXOTH);
+  configuration->set(minifi::Configure::nifi_default_directory, args.key_dir);
 
   std::shared_ptr<core::Repository> test_repo = std::make_shared<TestRepository>();
   std::shared_ptr<core::Repository> test_flow_repo = std::make_shared<TestFlowRepository>();
 
-  configuration->set(minifi::Configure::nifi_flow_configuration_file, test_file_location);
+  configuration->set(minifi::Configure::nifi_flow_configuration_file, args.test_file);
 
   std::shared_ptr<minifi::io::StreamFactory> stream_factory = minifi::io::StreamFactory::getInstance(configuration);
 
@@ -100,7 +83,7 @@ int main(int argc, char **argv) {
   content_repo->initialize(configuration);
 
   std::unique_ptr<core::FlowConfiguration> yaml_ptr = std::unique_ptr<core::YamlConfiguration>(
-      new core::YamlConfiguration(test_repo, test_repo, content_repo, stream_factory, configuration, test_file_location));
+      new core::YamlConfiguration(test_repo, test_repo, content_repo, stream_factory, configuration, args.test_file));
   std::shared_ptr<TestRepository> repo = std::static_pointer_cast<TestRepository>(test_repo);
 
   std::shared_ptr<minifi::FlowController> controller = std::make_shared<minifi::FlowController>(test_repo, test_flow_repo, configuration, std::move(yaml_ptr),
@@ -108,37 +91,31 @@ int main(int argc, char **argv) {
                                                                                                 DEFAULT_ROOT_GROUP_NAME,
                                                                                                 true);
 
-  core::YamlConfiguration yaml_config(test_repo, test_repo, content_repo, stream_factory, configuration, test_file_location);
+  core::YamlConfiguration yaml_config(test_repo, test_repo, content_repo, stream_factory, configuration, args.test_file);
 
-  std::unique_ptr<core::ProcessGroup> ptr = yaml_config.getRoot(test_file_location);
-  std::shared_ptr<core::ProcessGroup> pg = std::shared_ptr<core::ProcessGroup>(ptr.get());
-  std::shared_ptr<core::Processor> proc = ptr->findProcessor("invoke");
+  std::shared_ptr<core::Processor> proc = yaml_config.getRoot(args.test_file)->findProcessor("invoke");
   assert(proc != nullptr);
 
-  std::shared_ptr<minifi::processors::InvokeHTTP> inv = std::dynamic_pointer_cast<minifi::processors::InvokeHTTP>(proc);
-
+  const auto inv = std::dynamic_pointer_cast<minifi::processors::InvokeHTTP>(proc);
   assert(inv != nullptr);
-  std::string url = "";
+
+  std::string url;
   inv->getProperty(minifi::processors::InvokeHTTP::URL.getName(), url);
-  ptr.release();
   HttpResponder h_ex;
   std::string port, scheme, path;
-  CivetServer *server = nullptr;
-
+  std::unique_ptr<TestServer> server;
   parse_http_components(url, port, scheme, path);
-  struct mg_callbacks callback;
-  if (url.find("localhost") != std::string::npos) {
-    if (scheme == "https") {
-      std::string cert = "";
-      cert = key_dir + "nifi-cert.pem";
-      memset(&callback, 0, sizeof(callback));
-      callback.init_ssl = ssl_enable;
-      port +="s";
-      callback.log_message = log_message;
-      server = start_webserver(port, path, &h_ex, &callback, cert, cert);
-    } else {
-      server = start_webserver(port, path, &h_ex);
-    }
+  CivetCallbacks callback{};
+  if (scheme == "https") {
+    std::string cert;
+    cert = args.key_dir + "nifi-cert.pem";
+    memset(&callback, 0, sizeof(callback));
+    callback.init_ssl = ssl_enable;
+    std::string https_port = port + "s";
+    callback.log_message = log_message;
+    server = utils::make_unique<TestServer>(https_port, path, &h_ex, &callback, cert, cert);
+  } else {
+    server = utils::make_unique<TestServer>(port, path, &h_ex);
   }
   controller->load();
   controller->start();
@@ -146,7 +123,7 @@ int main(int argc, char **argv) {
 
   controller->waitUnload(60000);
   if (url.find("localhost") == std::string::npos) {
-    stop_webserver(server);
+    server.reset();
     exit(1);
   }
   std::string logs = LogTestController::getInstance().log_output.str();
@@ -157,7 +134,5 @@ int main(int argc, char **argv) {
   assert(logs.find("key:flow.id") != std::string::npos);
 
   LogTestController::getInstance().reset();
-  rmdir("./content_repository");
-  stop_webserver(server);
   return 0;
 }

@@ -17,11 +17,14 @@
  */
 
 #include "c2/ControllerSocketProtocol.h"
-#include "utils/StringUtils.h"
-#include <utility>
+
+#include <fstream>
 #include <memory>
-#include <vector>
 #include <string>
+#include <utility>
+#include <vector>
+
+#include "utils/StringUtils.h"
 
 namespace org {
 namespace apache {
@@ -297,8 +300,8 @@ int16_t ControllerSocketProtocol::heartbeat(const C2Payload &payload) {
   return 0;
 }
 
-} /* namespace c2 */
-} /* namespace minifi */
-} /* namespace nifi */
-} /* namespace apache */
-} /* namespace org */
+}  // namespace c2
+}  // namespace minifi
+}  // namespace nifi
+}  // namespace apache
+}  // namespace org
